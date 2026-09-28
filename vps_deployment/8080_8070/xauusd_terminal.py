@@ -20,6 +20,7 @@ import json
 import threading
 import time
 import random
+import math
 import logging
 import os
 import sqlite3
@@ -213,11 +214,30 @@ def load_initial_bars():
     
     if bars and len(bars) >= 500:
         with data_lock:
+            global current_trading_day, day_pv, day_vol, day_sq_diff
             historical_bars = bars[-10000:]
             cum_vol = sum(b['volume'] for b in historical_bars)
             cum_delta = historical_bars[-1].get('cvd', 0)
             avg_price = np.mean([(b['open'] + b['high'] + b['low'] + b['close']) / 4 for b in historical_bars])
             cum_pv = avg_price * cum_vol
+
+            # Initialize Daily Anchored VWAP accumulators for today
+            today_date = datetime.now(timezone.utc).date()
+            current_trading_day = today_date
+            today_bars = [b for b in historical_bars if (b['time'].date() if hasattr(b['time'], 'date') else datetime.strptime(str(b['time']), '%Y-%m-%d %H:%M:%S').date()) == today_date]
+            if today_bars:
+                day_vol = sum(b['volume'] for b in today_bars)
+                day_pv = sum(((b['high'] + b['low'] + b['close'])/3.0) * b['volume'] for b in today_bars)
+                curr_vwap = day_pv / day_vol if day_vol > 0 else today_bars[-1]['close']
+                day_sq_diff = sum(b['volume'] * ((((b['high'] + b['low'] + b['close'])/3.0) - curr_vwap)**2) for b in today_bars)
+                curr_std = math.sqrt(day_sq_diff / day_vol) if day_vol > 0 else 1.0
+                current_bar['vwap'] = round(curr_vwap, 2)
+                current_bar['vwap_up'] = round(curr_vwap + 1.5 * curr_std, 2)
+                current_bar['vwap_dn'] = round(curr_vwap - 1.5 * curr_std, 2)
+            else:
+                day_vol = 0.0
+                day_pv = 0.0
+                day_sq_diff = 0.0
             last_known_price = historical_bars[-1]['close']
             market_meta['open'] = historical_bars[0]['open']
             market_meta['high'] = max(b['high'] for b in historical_bars)
@@ -375,10 +395,27 @@ def process_tick(price, volume, is_buy):
         buy_vol = volume if is_buy else 0.0
         sell_vol = 0.0 if is_buy else volume
 
+        global current_trading_day, day_pv, day_vol, day_sq_diff
+        now_utc = datetime.now(timezone.utc)
+        today_date = now_utc.date()
+        if 'current_trading_day' not in globals() or current_trading_day != today_date:
+            current_trading_day = today_date
+            day_pv = 0.0
+            day_vol = 0.0
+            day_sq_diff = 0.0
+
         cum_delta += delta
         cum_vol += volume
         cum_pv += price * volume
-        vwap = cum_pv / cum_vol if cum_vol > 0 else price
+
+        day_pv += price * volume
+        day_vol += volume
+        vwap = round(day_pv / day_vol, 2) if day_vol > 0 else price
+
+        day_sq_diff += volume * ((price - vwap) ** 2)
+        std_dev = math.sqrt(day_sq_diff / day_vol) if day_vol > 0 else 1.0
+        vwap_up = round(vwap + (1.5 * std_dev), 2)
+        vwap_dn = round(vwap - (1.5 * std_dev), 2)
 
         now_utc = datetime.now(timezone.utc)
         current_minute = now_utc.replace(second=0, microsecond=0, tzinfo=None)
@@ -407,6 +444,8 @@ def process_tick(price, volume, is_buy):
                 current_bar['delta'] = delta
                 current_bar['cvd'] = cum_delta
                 current_bar['vwap'] = round(vwap, 2)
+                current_bar['vwap_up'] = vwap_up
+                current_bar['vwap_dn'] = vwap_dn
                 current_bar['poc'] = price
                 current_bar['levels'] = {round(price, 1): volume}
             else:
@@ -419,6 +458,8 @@ def process_tick(price, volume, is_buy):
                 current_bar['delta'] = current_bar['buy_vol'] - current_bar['sell_vol']
                 current_bar['cvd'] = cum_delta
                 current_bar['vwap'] = round(vwap, 2)
+                current_bar['vwap_up'] = vwap_up
+                current_bar['vwap_dn'] = vwap_dn
                 lvl = round(price, 1)
                 current_bar['levels'][lvl] = current_bar['levels'].get(lvl, 0) + volume
                 current_bar['poc'] = max(current_bar['levels'], key=current_bar['levels'].get)
@@ -1434,8 +1475,16 @@ TV_CHART_HTML = """<!DOCTYPE html>
       }
 
       if (!preserveRange) {
-        mainChart.timeScale().fitContent();
-        cvdChart.timeScale().fitContent();
+        const total = (data && data.candles) ? data.candles.length : 0;
+        if (total > 0) {
+          const fromIdx = Math.max(0, total - 120);
+          const toIdx = total + 6;
+          mainChart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
+          cvdChart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: toIdx });
+        } else {
+          mainChart.timeScale().fitContent();
+          cvdChart.timeScale().fitContent();
+        }
       }
 
       updateHeaderOhlc(null);
@@ -1617,6 +1666,12 @@ def api_chart_history():
         seen_times = set()
         now_cutoff_ts = int((datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)).replace(tzinfo=timezone.utc).timestamp())
 
+        # Daily Anchored VWAP variables (resets at 00:00 UTC each calendar day)
+        current_date = None
+        day_pv = 0.0
+        day_vol = 0.0
+        day_sq_diff = 0.0
+
         for r in rows:
             try:
                 dt = datetime.strptime(r[0], '%Y-%m-%d %H:%M:%S') if isinstance(r[0], str) else r[0]
@@ -1625,17 +1680,33 @@ def api_chart_history():
                     continue
                 seen_times.add(ts)
 
+                bar_date = dt.date()
+                if bar_date != current_date:
+                    current_date = bar_date
+                    day_pv = 0.0
+                    day_vol = 0.0
+                    day_sq_diff = 0.0
+
                 op, hp, lp, cp = float(r[1]), float(r[2]), float(r[3]), float(r[4])
-                vol = float(r[5] or 0)
+                vol = float(r[5] or 1.0)
                 c_val = float(r[7] or 0)
-                v_val = float(r[8] or cp)
                 abs_text = r[10]
+
+                tp = (hp + lp + cp) / 3.0
+                day_pv += tp * vol
+                day_vol += vol
+                v_val = round(day_pv / day_vol, 2) if day_vol > 0 else cp
+
+                day_sq_diff += vol * ((tp - v_val) ** 2)
+                std_dev = math.sqrt(day_sq_diff / day_vol) if day_vol > 0 else 1.0
+                v_up = round(v_val + (1.5 * std_dev), 2)
+                v_dn = round(v_val - (1.5 * std_dev), 2)
 
                 candles.append({'time': ts, 'open': op, 'high': hp, 'low': lp, 'close': cp})
                 volume.append({'time': ts, 'value': vol, 'color': 'rgba(0, 230, 118, 0.45)' if cp >= op else 'rgba(255, 59, 48, 0.45)'})
                 vwap.append({'time': ts, 'value': v_val})
-                vwap_up.append({'time': ts, 'value': round(v_val + 1.8, 2)})
-                vwap_dn.append({'time': ts, 'value': round(v_val - 1.8, 2)})
+                vwap_up.append({'time': ts, 'value': v_up})
+                vwap_dn.append({'time': ts, 'value': v_dn})
                 cvd.append({'time': ts, 'value': c_val})
 
                 if abs_text == 'Bullish Absorption':
@@ -1664,6 +1735,9 @@ def api_live_candle():
         cb = dict(current_bar)
         price = last_known_price
         c_delta = cum_delta
+        live_vwap = cb.get('vwap', price)
+        live_up = cb.get('vwap_up', round(live_vwap + 1.8, 2))
+        live_dn = cb.get('vwap_dn', round(live_vwap - 1.8, 2))
 
     try:
         if cb.get('time') is not None and cb.get('open') is not None:
@@ -1674,19 +1748,18 @@ def api_live_candle():
             hp = float(cb.get('high') or price)
             lp = float(cb.get('low') or price)
             vol = float(cb.get('volume') or 0)
-            v_val = float(cb.get('vwap') or cp)
             c_val = float(cb.get('cvd') or c_delta)
             return jsonify({
                 'time': ts, 'open': op, 'high': hp, 'low': lp, 'close': cp,
-                'volume': vol, 'vwap': v_val, 'vwap_up': round(v_val + 1.8, 2),
-                'vwap_dn': round(v_val - 1.8, 2), 'cvd': c_val, 'price': price
+                'volume': vol, 'vwap': live_vwap, 'vwap_up': live_up,
+                'vwap_dn': live_dn, 'cvd': c_val, 'price': price
             })
         else:
             ts = int(datetime.now(timezone.utc).replace(second=0, microsecond=0).timestamp())
             return jsonify({
                 'time': ts, 'open': price, 'high': price, 'low': price, 'close': price,
-                'volume': 0, 'vwap': price, 'vwap_up': round(price + 1.8, 2),
-                'vwap_dn': round(price - 1.8, 2), 'cvd': c_delta, 'price': price
+                'volume': 0, 'vwap': live_vwap, 'vwap_up': live_up,
+                'vwap_dn': live_dn, 'cvd': c_delta, 'price': price
             })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
