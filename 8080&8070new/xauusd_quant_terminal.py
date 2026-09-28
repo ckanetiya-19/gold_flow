@@ -236,6 +236,23 @@ def _fetch_binance_klines():
                     historical_bars.append(bar)
                     save_bar_to_db(bar)
                 if historical_bars:
+                    global current_trading_day, day_pv, day_vol, day_sq_diff
+                    today_date = datetime.now(timezone.utc).date()
+                    current_trading_day = today_date
+                    today_bars = [b for b in historical_bars if (b['time'].date() if hasattr(b['time'], 'date') else datetime.strptime(str(b['time']), '%Y-%m-%d %H:%M:%S').date()) == today_date]
+                    if today_bars:
+                        day_vol = sum(b['volume'] for b in today_bars)
+                        day_pv = sum(((b['high'] + b['low'] + b['close'])/3.0) * b['volume'] for b in today_bars)
+                        curr_vwap = day_pv / day_vol if day_vol > 0 else today_bars[-1]['close']
+                        day_sq_diff = sum(b['volume'] * ((((b['high'] + b['low'] + b['close'])/3.0) - curr_vwap)**2) for b in today_bars)
+                        curr_std = math.sqrt(day_sq_diff / day_vol) if day_vol > 0 else 1.0
+                        current_bar['vwap'] = round(curr_vwap, 2)
+                        current_bar['vwap_up'] = round(curr_vwap + 1.5 * curr_std, 2)
+                        current_bar['vwap_dn'] = round(curr_vwap - 1.5 * curr_std, 2)
+                    else:
+                        day_vol = 0.0
+                        day_pv = 0.0
+                        day_sq_diff = 0.0
                     last_known_price = historical_bars[-1]['close']
                     market_meta['open'] = historical_bars[0]['open']
                     market_meta['high'] = max(b['high'] for b in historical_bars)
@@ -251,7 +268,7 @@ def load_initial_bars():
     """Load continuous bars from Quant DB, Terminal DB, or V2 DB, falling back to Binance 1000 bars."""
     global historical_bars, cum_vol, cum_pv, cum_delta, last_known_price, market_meta
     source_db = None
-    for test_path in [DB_PATH, TERMINAL_DB_PATH, V2_DB_PATH]:
+    for test_path in [TERMINAL_DB_PATH, DB_PATH, V2_DB_PATH]:
         if os.path.exists(test_path):
             try:
                 c = sqlite3.connect(test_path)
@@ -296,6 +313,23 @@ def load_initial_bars():
                     cum_delta += bar['delta']
 
                 if historical_bars:
+                    global current_trading_day, day_pv, day_vol, day_sq_diff
+                    today_date = datetime.now(timezone.utc).date()
+                    current_trading_day = today_date
+                    today_bars = [b for b in historical_bars if (b['time'].date() if hasattr(b['time'], 'date') else datetime.strptime(str(b['time']), '%Y-%m-%d %H:%M:%S').date()) == today_date]
+                    if today_bars:
+                        day_vol = sum(b['volume'] for b in today_bars)
+                        day_pv = sum(((b['high'] + b['low'] + b['close'])/3.0) * b['volume'] for b in today_bars)
+                        curr_vwap = day_pv / day_vol if day_vol > 0 else today_bars[-1]['close']
+                        day_sq_diff = sum(b['volume'] * ((((b['high'] + b['low'] + b['close'])/3.0) - curr_vwap)**2) for b in today_bars)
+                        curr_std = math.sqrt(day_sq_diff / day_vol) if day_vol > 0 else 1.0
+                        current_bar['vwap'] = round(curr_vwap, 2)
+                        current_bar['vwap_up'] = round(curr_vwap + 1.5 * curr_std, 2)
+                        current_bar['vwap_dn'] = round(curr_vwap - 1.5 * curr_std, 2)
+                    else:
+                        day_vol = 0.0
+                        day_pv = 0.0
+                        day_sq_diff = 0.0
                     last_known_price = historical_bars[-1]['close']
                     market_meta['high'] = max(b['high'] for b in historical_bars)
                     market_meta['low'] = min(b['low'] for b in historical_bars)
@@ -1343,11 +1377,7 @@ TV_CHART_HTML = """<!DOCTYPE html>
         borderVisible: false
       });
 
-      volumeSeries = mainChart.addHistogramSeries({
-        priceFormat: { type: 'volume' },
-        priceScaleId: '',
-        scaleMargins: { top: 0.82, bottom: 0.0 }
-      });
+      volumeSeries = null;
 
       vwapSeries = mainChart.addLineSeries({
         color: '#FFD700',
@@ -1414,8 +1444,8 @@ TV_CHART_HTML = """<!DOCTYPE html>
           return;
         }
         const c = param.seriesData.get(candleSeries);
-        const v = param.seriesData.get(volumeSeries);
-        updateHeaderOhlc({ open: c.open, high: c.high, low: c.low, close: c.close, volume: v ? v.value : 0 });
+        const v = volumeSeries ? param.seriesData.get(volumeSeries) : null;
+        updateHeaderOhlc({ open: c.open, high: c.high, low: c.low, close: c.close, volume: v ? v.value : (c.volume || 0) });
       });
 
       // Auto resize on container change
@@ -1558,7 +1588,7 @@ TV_CHART_HTML = """<!DOCTYPE html>
       const data = aggregateData(currentTf);
 
       candleSeries.setData(data.candles);
-      volumeSeries.setData(data.volume);
+      if (volumeSeries) volumeSeries.setData(data.volume);
 
       if (showVwap) {
         vwapSeries.setData(data.vwap);
@@ -1698,10 +1728,12 @@ TV_CHART_HTML = """<!DOCTYPE html>
             candleSeries.update({
               time: data.time, open: data.open, high: data.high, low: data.low, close: data.close
             });
-            volumeSeries.update({
-              time: data.time, value: data.volume,
-              color: data.close >= data.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
-            });
+            if (volumeSeries) {
+              volumeSeries.update({
+                time: data.time, value: data.volume,
+                color: data.close >= data.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
+              });
+            }
             if (showVwap && data.vwap) {
               vwapSeries.update({ time: data.time, value: data.vwap });
             }
@@ -1728,10 +1760,12 @@ TV_CHART_HTML = """<!DOCTYPE html>
               };
               const aggVol = slice.reduce((acc, s) => acc + (s.volume || 0), 0);
               candleSeries.update(aggC);
-              volumeSeries.update({
-                time: bucket, value: aggVol,
-                color: aggC.close >= aggC.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
-              });
+              if (volumeSeries) {
+                volumeSeries.update({
+                  time: bucket, value: aggVol,
+                  color: aggC.close >= aggC.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
+                });
+              }
               if (showVwap && data.vwap) vwapSeries.update({ time: bucket, value: data.vwap });
               if (showBands && data.vwap_up) {
                 vwapUpSeries.update({ time: bucket, value: data.vwap_up });
