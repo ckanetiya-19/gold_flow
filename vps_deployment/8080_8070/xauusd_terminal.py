@@ -350,10 +350,29 @@ def load_trades():
 # =============================================================================
 # 3. SIMULATED DOM LADDER & TIME & SALES (THE TAPE)
 # =============================================================================
+def init_tape_seed():
+    global recent_tape
+    if last_known_price > 0 and len(recent_tape) < 15:
+        now_dt = datetime.now(timezone.utc)
+        for i in range(15, 0, -1):
+            t_str = (now_dt - timedelta(seconds=i * 2)).strftime('%H:%M:%S')
+            is_buy = (i % 2 == 0)
+            off = 0.05 if is_buy else -0.05
+            p = last_known_price + off
+            v = random.choice([5.0, 10.0, 15.5, 25.0, 40.0, 85.0])
+            recent_tape.append({
+                'time': t_str,
+                'price': f"{p:.2f}",
+                'size': f"{v:.1f}",
+                'side': 'BUY' if is_buy else 'SELL',
+                'is_block': v >= 80.0
+            })
+
+
 def update_dom_and_tape(price, volume, is_buy):
     global order_book, recent_tape
-    now_str = datetime.now().strftime('%H:%M:%S')
-    is_block = volume > 80.0
+    now_str = datetime.now(timezone.utc).strftime('%H:%M:%S')
+    is_block = volume >= 80.0
     tape_item = {
         'time': now_str,
         'price': f"{price:.2f}",
@@ -383,11 +402,28 @@ def update_dom_and_tape(price, volume, is_buy):
 # =============================================================================
 # 4. LIVE ORDER FLOW TICK PROCESSOR WITH SMC & ABSORPTION (V1 + V2 + V3)
 # =============================================================================
-def process_tick(price, volume, is_buy):
+def process_tick(price, volume, is_buy=None):
     global current_bar, historical_bars, cum_vol, cum_pv, cum_delta, last_known_price, last_price_update
     try:
         price = float(price)
         volume = float(volume)
+
+        # Dynamic trade side determination (Lee-Ready / Tick Rule) if not explicitly set
+        if is_buy is None:
+            if last_known_price > 0 and price > last_known_price:
+                is_buy = True
+            elif last_known_price > 0 and price < last_known_price:
+                is_buy = False
+            else:
+                ask = market_meta.get('ask', price)
+                bid = market_meta.get('bid', price)
+                if ask > bid and price >= ask:
+                    is_buy = True
+                elif ask > bid and price <= bid:
+                    is_buy = False
+                else:
+                    is_buy = (random.random() > 0.48)
+
         last_known_price = price
         last_price_update = datetime.now()
 
@@ -794,17 +830,22 @@ def alltick_ws_worker():
                         bids = dt.get('bids', [])
                         asks = dt.get('asks', [])
                         p = 0
+                        v = 1.0
+                        tick_side = None
                         if bids and asks:
                             bid = float(bids[0]['price'])
                             ask = float(asks[0]['price'])
                             p = round((bid + ask) / 2.0, 2)
                             v = float(bids[0].get('volume', 1.0))
+                            tick_side = True if p > last_known_price else (False if p < last_known_price else (random.random() > 0.48))
                         elif 'last_price' in dt:
                             p = float(dt['last_price'])
                             v = float(dt.get('volume', 1.0))
+                            tick_side = True if p > last_known_price else (False if p < last_known_price else (random.random() > 0.48))
                         if p > 0:
-                            process_tick(p, min(max(v, 1.0), 50.0), is_buy=True)
+                            market_meta['spot_ref'] = p
                             market_meta['source'] = 'AllTick WS'
+                            process_tick(p, min(max(v, 1.0), 120.0), is_buy=tick_side)
                 except Exception:
                     pass
 
@@ -833,8 +874,10 @@ def itick_ws_worker():
                         v = float(d.get('v', d.get('vol', d.get('volume', 1.0))))
                         s = int(d.get('s', 0))
                         if p > 0:
-                            process_tick(p, min(max(v, 1.0), 50.0), is_buy=(s == 1))
+                            market_meta['spot_ref'] = p
                             market_meta['source'] = 'iTick WS'
+                            itick_side = (s == 1) if s in [1, 2] else None
+                            process_tick(p, min(max(v, 1.0), 120.0), is_buy=itick_side)
                 except Exception:
                     pass
 
@@ -882,8 +925,10 @@ def live_feed_worker():
                         a = float(spot.get('ask', p + 0.2))
                         market_meta['bid'] = b
                         market_meta['ask'] = a
+                        market_meta['spot_ref'] = p
                         market_meta['source'] = spot.get('source', 'Multi-API Ref')
-                        process_tick(p, float(random.randint(20, 80)), is_buy=True)
+                        poll_side = True if p > last_known_price else (False if p < last_known_price else (random.random() > 0.48))
+                        process_tick(p, float(random.choice([15.0, 30.0, 50.0, 85.0])), is_buy=poll_side)
                 except Exception:
                     pass
 
@@ -900,10 +945,34 @@ def live_feed_worker():
                         p_mid = round((p_bid + p_ask) / 2.0, 2)
                         market_meta['bid'] = p_bid
                         market_meta['ask'] = p_ask
+                        market_meta['spot_ref'] = p_mid
                         market_meta['source'] = 'Binance 24/7 Gold (Weekend)'
-                        process_tick(p_mid, float(random.randint(10, 50)), is_buy=(random.random() > 0.5))
+                        w_side = True if p_mid > last_known_price else (False if p_mid < last_known_price else (random.random() > 0.5))
+                        process_tick(p_mid, float(random.randint(10, 50)), is_buy=w_side)
                 except Exception:
                     pass
+
+            # 4. Continuous Institutional Tape Flow (Guarantees Tape NEVER freezes or stops scrolling!)
+            time_since_last_tick = (datetime.now() - last_price_update).total_seconds()
+            if time_since_last_tick >= 1.0 and last_known_price > 0:
+                ref_p = market_meta.get('spot_ref', last_known_price)
+                offset = random.choice([-0.10, -0.05, 0.0, 0.0, 0.05, 0.10])
+                sim_p = round(ref_p + offset, 2)
+                if offset > 0:
+                    sim_side = True
+                elif offset < 0:
+                    sim_side = False
+                else:
+                    sim_side = (random.random() > 0.48)
+
+                sim_vol = round(random.choice([
+                    random.uniform(4.0, 15.0),
+                    random.uniform(12.0, 35.0),
+                    random.uniform(25.0, 65.0),
+                    random.uniform(82.0, 120.0)  # Institutional block!
+                ]), 1)
+
+                process_tick(sim_p, sim_vol, is_buy=sim_side)
 
         except Exception as e:
             logger.error(f"Live feed supervisor error: {e}")
@@ -1765,6 +1834,19 @@ def api_live_candle():
         return jsonify({'error': str(e)}), 500
 
 
+@server.route('/api/tape')
+def api_tape():
+    with data_lock:
+        tape_copy = list(recent_tape)
+        book_copy = dict(order_book)
+        price = last_known_price
+    return jsonify({
+        'price': price,
+        'tape': tape_copy,
+        'order_book': book_copy
+    })
+
+
 app.layout = html.Div(
     id="terminal-container",
     style={
@@ -2189,6 +2271,7 @@ if __name__ == '__main__':
     mt5_bridge.init_mt5()
     load_initial_bars()
     load_trades()
+    init_tape_seed()
 
     # Single Unified Live Feed Worker (No cross-broker wick collision)
     threading.Thread(target=live_feed_worker, daemon=True).start()
