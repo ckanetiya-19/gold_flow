@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Caches and logs
+.pytest_cache/
+server_logs/
+*.log
+
+# Large media files and archives
+*.mp4
+*.zip
+*.tar.gz
+*.rar
+
+# Screenshots and temp dumps
+screenshots/
+test_shot_*.png
+
+# Virtual environments
+venv/
+env/
+.env
+
+# System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

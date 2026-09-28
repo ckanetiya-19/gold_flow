@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: goldflow
+Version: 0.1.0
+Summary: Order flow research and execution toolkit for XAU/USD: read COMEX GC, execute spot
+Requires-Python: >=3.11
+Requires-Dist: numpy>=1.24
+Requires-Dist: pandas>=2.0
+Requires-Dist: scipy>=1.10
+Requires-Dist: statsmodels>=0.14
+Provides-Extra: databento
+Requires-Dist: databento>=0.34; extra == "databento"
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"

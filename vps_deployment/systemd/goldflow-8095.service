@@ -1,0 +1,18 @@
+[Unit]
+Description=GoldFlow Port 8095 - Master Quant Stream Terminal
+After=network.target
+
+[Service]
+Type=simple
+User=goldflow
+WorkingDirectory=/opt/goldflow/8088_8095
+ExecStart=/opt/goldflow/venv/bin/python xauusd_hybrid_stream_terminal.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goldflow-8095
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=GoldFlow Port 8088 - Live Consensus Trading Engine
+After=network.target
+
+[Service]
+Type=simple
+User=goldflow
+WorkingDirectory=/opt/goldflow/8088_8095
+ExecStart=/opt/goldflow/venv/bin/python goldflow_live_engine_8088.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goldflow-8088
+
+[Install]
+WantedBy=multi-user.target
