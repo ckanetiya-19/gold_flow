@@ -40,9 +40,10 @@ import time
 import logging
 import os
 import sys
-from datetime import datetime, timedelta, timezone
-import MetaTrader5 as mt5
-import sqlite3
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None
 import websocket
 from multi_api_key_pool import get_spot_gold_live
 
@@ -107,6 +108,8 @@ COMMENT_MODEL_B = 'GF-SMC-OF-B'
 mt5_lock = threading.RLock()
 
 def resolve_gold_symbol():
+    if mt5 is None:
+        return 'XAUUSD.sd'
     try:
         if not mt5.initialize():
             return 'XAUUSD.sd'
@@ -122,7 +125,8 @@ def resolve_gold_symbol():
     return 'XAUUSD.sd'
 
 SYMBOL = resolve_gold_symbol()
-atexit.register(mt5.shutdown)
+if mt5 is not None:
+    atexit.register(mt5.shutdown)
 
 def get_current_5m_candle_time():
     """Returns the epoch start timestamp of the current 5-minute candle bar"""
@@ -134,6 +138,8 @@ def get_5m_countdown_str():
     return f"{rem_sec // 60}m {rem_sec % 60:02d}s"
 
 def get_initial_traded_candle():
+    if mt5 is None:
+        return 0
     try:
         with mt5_lock:
             if not mt5.initialize():
@@ -820,6 +826,9 @@ def mt5_execution_worker():
     prev_tracked_positions_count = 0
     prev_model_b_count = 0          # Track Model B positions separately for Sweep Reset
     while True:
+        if mt5 is None:
+            time.sleep(3)
+            continue
         try:
             with mt5_lock:
                 if not mt5.initialize():
@@ -1192,6 +1201,9 @@ def execute_order(direction, magic_num, comment_tag, reason_str, candle_time=0):
             # Pre-lock current 5M candle immediately
             engine_state['last_traded_candle_time'] = curr_candle
 
+        if mt5 is None:
+            log_audit(f'ORDER SIMULATED (Linux VPS Standby): [{comment_tag}] 0.01 {direction}', 'SIMULATED')
+            return
         with mt5_lock:
             if not mt5.initialize():
                 return
@@ -1240,6 +1252,8 @@ def execute_order(direction, magic_num, comment_tag, reason_str, candle_time=0):
 def panic_close_all():
     """Closes all open positions immediately"""
     try:
+        if mt5 is None:
+            return "MT5 not active on Linux VPS"
         with mt5_lock:
             if not mt5.initialize():
                 return "MT5 not connected"
