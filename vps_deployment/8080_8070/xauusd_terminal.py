@@ -8,6 +8,7 @@
 
 import dash
 from dash import dcc, html, Input, Output
+from flask import request, jsonify, render_template_string
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -212,7 +213,7 @@ def load_initial_bars():
     
     if bars and len(bars) >= 500:
         with data_lock:
-            historical_bars = bars[-1500:]
+            historical_bars = bars[-10000:]
             cum_vol = sum(b['volume'] for b in historical_bars)
             cum_delta = historical_bars[-1].get('cvd', 0)
             avg_price = np.mean([(b['open'] + b['high'] + b['low'] + b['close']) / 4 for b in historical_bars])
@@ -235,7 +236,7 @@ def _fetch_bars_from_db(db_file):
         conn = sqlite3.connect(db_file, timeout=5)
         c = conn.cursor()
         c.execute('''SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, phase, confidence, signal_type, session, imbalance, fvg, absorption, cvd_divergence
-                     FROM price_bars ORDER BY bar_time DESC LIMIT 1500''')
+                     FROM price_bars ORDER BY bar_time DESC LIMIT 10000''')
         rows = c.fetchall()
         conn.close()
         bars = []
@@ -391,7 +392,7 @@ def process_tick(price, volume, is_buy):
                     final_bar = finalize_bar(current_bar, vwap)
                     historical_bars.append(final_bar)
                     save_bar_to_db(final_bar)
-                    if len(historical_bars) > 2000:
+                    if len(historical_bars) > 10000:
                         historical_bars.pop(0)
                     check_terminal_trade_signals(final_bar)
 
@@ -880,6 +881,817 @@ app = dash.Dash(
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
 
+TV_CHART_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TradingView Order Flow Engine</title>
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0A0D14;
+      color: #C9D1D9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'JetBrains Mono', monospace;
+      overflow: hidden;
+      user-select: none;
+    }
+    #tv-header {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      background: #0D1117;
+      border-bottom: 1px solid #21262D;
+      font-size: 11px;
+    }
+    .header-left, .header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .symbol-tag {
+      font-weight: 800;
+      color: #FFD700;
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-right: 4px;
+    }
+    .pulsar {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #00E676; box-shadow: 0 0 8px #00E676;
+      animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.3; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
+      100% { opacity: 0.3; transform: scale(0.9); }
+    }
+    .btn-group {
+      display: flex;
+      gap: 2px;
+      background: #161B22;
+      padding: 2px;
+      border-radius: 4px;
+      border: 1px solid #21262D;
+    }
+    .btn-tf, .btn-tool {
+      background: transparent;
+      border: none;
+      color: #8B949E;
+      padding: 3px 7px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: inherit;
+    }
+    .btn-tf:hover, .btn-tool:hover {
+      background: #21262D;
+      color: #FFF;
+    }
+    .btn-tf.active, .btn-tool.active {
+      background: #1F6FEB;
+      color: #FFF;
+      box-shadow: 0 0 6px rgba(31, 111, 235, 0.4);
+    }
+    .btn-tool.active-gold {
+      background: #8A6508;
+      color: #FFD700;
+      border: 1px solid #D29922;
+    }
+    .btn-tool.active-cyan {
+      background: #0A3D52;
+      color: #00F0FF;
+      border: 1px solid #00F0FF;
+    }
+    .btn-tool.active-green {
+      background: #0E4429;
+      color: #00E676;
+      border: 1px solid #00E676;
+    }
+    .ohlc-readout {
+      display: flex;
+      gap: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #8B949E;
+      margin-left: 8px;
+    }
+    .ohlc-readout span b { font-weight: 600; }
+    .ohlc-readout .c-up { color: #00E676; }
+    .ohlc-readout .c-down { color: #FF3B30; }
+
+    #chart-viewport {
+      position: relative;
+      width: 100%;
+      height: calc(100% - 38px);
+      display: flex;
+      flex-direction: column;
+    }
+    #main-chart {
+      flex: 3;
+      width: 100%;
+      position: relative;
+    }
+    #cvd-chart {
+      flex: 1;
+      width: 100%;
+      border-top: 1px solid #21262D;
+      position: relative;
+    }
+    .pane-label {
+      position: absolute;
+      top: 6px; left: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #8B949E;
+      z-index: 5;
+      pointer-events: none;
+      background: rgba(10, 13, 20, 0.7);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    #floating-live-btn {
+      position: absolute;
+      bottom: 25%; right: 55px;
+      background: #1F6FEB;
+      color: #FFF;
+      border: 1px solid #388BFD;
+      border-radius: 14px;
+      padding: 4px 10px;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      z-index: 20;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    #floating-live-btn:hover {
+      background: #388BFD;
+    }
+    #loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(10, 13, 20, 0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      gap: 10px;
+    }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid #21262D;
+      border-top: 3px solid #00F0FF;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <div id="tv-header">
+    <div class="header-left">
+      <div class="symbol-tag">
+        <div class="pulsar"></div>
+        <span>XAU/USD</span>
+      </div>
+
+      <!-- Timeframe Buttons -->
+      <div class="btn-group">
+        <button class="btn-tf active" onclick="changeTimeframe(1, this)">1M</button>
+        <button class="btn-tf" onclick="changeTimeframe(5, this)">5M</button>
+        <button class="btn-tf" onclick="changeTimeframe(15, this)">15M</button>
+        <button class="btn-tf" onclick="changeTimeframe(30, this)">30M</button>
+        <button class="btn-tf" onclick="changeTimeframe(60, this)">1H</button>
+        <button class="btn-tf" onclick="changeTimeframe(240, this)">4H</button>
+        <button class="btn-tf" onclick="changeTimeframe(1440, this)">1D</button>
+      </div>
+
+      <!-- Live OHLC Readout -->
+      <div class="ohlc-readout" id="ohlcDisplay">
+        <span>O: <b id="valO">-</b></span>
+        <span>H: <b id="valH">-</b></span>
+        <span>L: <b id="valL">-</b></span>
+        <span>C: <b id="valC">-</b></span>
+        <span>Vol: <b id="valV">-</b></span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Indicators -->
+      <button class="btn-tool active-gold" id="btnVwap" onclick="toggleIndicator('vwap')">VWAP</button>
+      <button class="btn-tool active-cyan" id="btnBands" onclick="toggleIndicator('bands')">±1.5σ</button>
+      <button class="btn-tool active-cyan" id="btnCvd" onclick="toggleIndicator('cvd')">CVD</button>
+      <button class="btn-tool active-green" id="btnAbs" onclick="toggleIndicator('abs')">⚡ABS</button>
+
+      <!-- Chart Control Actions -->
+      <div class="btn-group" style="margin-left: 6px;">
+        <button class="btn-tool" onclick="fitChart()" title="Fit Content (Show All)">⤢ FIT</button>
+        <button class="btn-tool" onclick="scrollToRealtime()" title="Snap to Live Edge">⏭ LIVE</button>
+        <button class="btn-tool" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="chart-viewport">
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <div style="font-size:12px; color:#00F0FF; font-weight:700;">INITIALIZING TRADINGVIEW ENGINE...</div>
+    </div>
+
+    <!-- Main Candlestick Chart -->
+    <div id="main-chart">
+      <div class="pane-label">CANDLES // INSTITUTIONAL VWAP</div>
+    </div>
+
+    <!-- CVD Sub-Chart -->
+    <div id="cvd-chart">
+      <div class="pane-label" style="color:#00F0FF;">CVD // CUMULATIVE VOLUME DELTA</div>
+    </div>
+
+    <!-- Floating Jump to Live Button -->
+    <button id="floating-live-btn" onclick="scrollToRealtime()">⏭ Live Price</button>
+  </div>
+
+  <script>
+    let rawCandles = [];
+    let rawVolume = [];
+    let rawVwap = [];
+    let rawVwapUp = [];
+    let rawVwapDn = [];
+    let rawCvd = [];
+    let rawMarkers = [];
+
+    let currentTf = 1;
+    let showVwap = true;
+    let showBands = true;
+    let showCvd = true;
+    let showAbs = true;
+
+    // Charts
+    let mainChart, cvdChart;
+    let candleSeries, volumeSeries, vwapSeries, vwapUpSeries, vwapDnSeries, cvdSeries;
+
+    function initCharts() {
+      const mainEl = document.getElementById('main-chart');
+      const cvdEl = document.getElementById('cvd-chart');
+
+      const chartOptions = {
+        layout: {
+          background: { color: '#0A0D14' },
+          textColor: '#8B949E',
+          fontSize: 11,
+          fontFamily: "'JetBrains Mono', 'Consolas', monospace"
+        },
+        grid: {
+          vertLines: { color: '#161B22' },
+          horzLines: { color: '#161B22' }
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+          vertLine: { color: '#8B949E', width: 1, style: 3, labelBackgroundColor: '#1F6FEB' },
+          horzLine: { color: '#8B949E', width: 1, style: 3, labelBackgroundColor: '#1F6FEB' }
+        },
+        timeScale: {
+          borderColor: '#21262D',
+          timeVisible: true,
+          secondsVisible: false,
+          rightOffset: 12,
+          barSpacing: 6,
+          minBarSpacing: 1.5
+        },
+        rightPriceScale: {
+          borderColor: '#21262D',
+          autoScale: true,
+          scaleMargins: { top: 0.1, bottom: 0.2 }
+        },
+        handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+        handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true }
+      };
+
+      // 1. Main Candlestick Chart
+      mainChart = LightweightCharts.createChart(mainEl, { ...chartOptions });
+
+      candleSeries = mainChart.addCandlestickSeries({
+        upColor: '#00E676',
+        downColor: '#FF3B30',
+        wickUpColor: '#00E676',
+        wickDownColor: '#FF3B30',
+        borderVisible: false
+      });
+
+      volumeSeries = mainChart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: '',
+        scaleMargins: { top: 0.82, bottom: 0.0 }
+      });
+
+      vwapSeries = mainChart.addLineSeries({
+        color: '#FFD700',
+        lineWidth: 2,
+        title: 'VWAP',
+        crosshairMarkerVisible: true
+      });
+
+      vwapUpSeries = mainChart.addLineSeries({
+        color: '#FF9F0A',
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        title: '+1.5σ'
+      });
+
+      vwapDnSeries = mainChart.addLineSeries({
+        color: '#00F0FF',
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        title: '-1.5σ'
+      });
+
+      // 2. CVD Sub-Chart
+      cvdChart = LightweightCharts.createChart(cvdEl, {
+        ...chartOptions,
+        rightPriceScale: {
+          borderColor: '#21262D',
+          autoScale: true,
+          scaleMargins: { top: 0.15, bottom: 0.15 }
+        }
+      });
+
+      cvdSeries = cvdChart.addAreaSeries({
+        topColor: 'rgba(0, 240, 255, 0.45)',
+        bottomColor: 'rgba(0, 240, 255, 0.02)',
+        lineColor: '#00F0FF',
+        lineWidth: 2,
+        title: 'CVD'
+      });
+
+      // Synchronize visible ranges between Main and CVD charts
+      let isSyncing = false;
+      mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (isSyncing || !range) return;
+        isSyncing = true;
+        cvdChart.timeScale().setVisibleLogicalRange(range);
+        isSyncing = false;
+
+        // Show/hide floating jump-to-live button if scrolled far from live
+        checkLiveEdge(range);
+      });
+
+      cvdChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (isSyncing || !range) return;
+        isSyncing = true;
+        mainChart.timeScale().setVisibleLogicalRange(range);
+        isSyncing = false;
+      });
+
+      // Crosshair inspection
+      mainChart.subscribeCrosshairMove(param => {
+        if (!param || !param.time || !param.seriesData.get(candleSeries)) {
+          updateHeaderOhlc(null);
+          return;
+        }
+        const c = param.seriesData.get(candleSeries);
+        const v = param.seriesData.get(volumeSeries);
+        updateHeaderOhlc({ open: c.open, high: c.high, low: c.low, close: c.close, volume: v ? v.value : 0 });
+      });
+
+      // Auto resize on container change
+      const ro = new ResizeObserver(() => {
+        if (mainChart) mainChart.applyOptions({ width: mainEl.clientWidth, height: mainEl.clientHeight });
+        if (cvdChart) cvdChart.applyOptions({ width: cvdEl.clientWidth, height: cvdEl.clientHeight });
+      });
+      ro.observe(mainEl);
+      ro.observe(cvdEl);
+    }
+
+    function checkLiveEdge(range) {
+      const btn = document.getElementById('floating-live-btn');
+      if (!btn) return;
+      const totalBars = rawCandles.length / currentTf;
+      if (range.to < totalBars - 10) {
+        btn.style.display = 'block';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+
+    function updateHeaderOhlc(d) {
+      if (!d) {
+        if (rawCandles.length > 0) {
+          d = rawCandles[rawCandles.length - 1];
+        } else return;
+      }
+      document.getElementById('valO').innerText = d.open ? d.open.toFixed(2) : '-';
+      document.getElementById('valH').innerText = d.high ? d.high.toFixed(2) : '-';
+      document.getElementById('valL').innerText = d.low ? d.low.toFixed(2) : '-';
+      const cEl = document.getElementById('valC');
+      if (d.close) {
+        cEl.innerText = d.close.toFixed(2);
+        cEl.className = (d.close >= d.open) ? 'c-up' : 'c-down';
+      }
+      document.getElementById('valV').innerText = d.volume ? d.volume.toFixed(1) + ' oz' : '0.0 oz';
+    }
+
+    // Client-side instant resampling
+    function aggregateData(tfMinutes) {
+      if (tfMinutes === 1) {
+        return {
+          candles: rawCandles,
+          volume: rawVolume,
+          vwap: rawVwap,
+          vwapUp: rawVwapUp,
+          vwapDn: rawVwapDn,
+          cvd: rawCvd,
+          markers: rawMarkers
+        };
+      }
+
+      const sec = tfMinutes * 60;
+      const aggCandles = [];
+      const aggVolume = [];
+      const aggVwap = [];
+      const aggVwapUp = [];
+      const aggVwapDn = [];
+      const aggCvd = [];
+      const aggMarkers = [];
+
+      let cur = null;
+      let curVol = 0;
+      let lastVwap = null, lastCvd = null;
+
+      for (let i = 0; i < rawCandles.length; i++) {
+        const c = rawCandles[i];
+        const bucket = Math.floor(c.time / sec) * sec;
+
+        if (!cur || cur.time !== bucket) {
+          if (cur) {
+            aggCandles.push(cur);
+            aggVolume.push({
+              time: cur.time,
+              value: curVol,
+              color: cur.close >= cur.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
+            });
+            if (lastVwap) {
+              aggVwap.push({ time: cur.time, value: lastVwap });
+              aggVwapUp.push({ time: cur.time, value: +(lastVwap + 1.8).toFixed(2) });
+              aggVwapDn.push({ time: cur.time, value: +(lastVwap - 1.8).toFixed(2) });
+            }
+            if (lastCvd !== null) {
+              aggCvd.push({ time: cur.time, value: lastCvd });
+            }
+          }
+          cur = { time: bucket, open: c.open, high: c.high, low: c.low, close: c.close };
+          curVol = c.volume || 0;
+        } else {
+          cur.high = Math.max(cur.high, c.high);
+          cur.low = Math.min(cur.low, c.low);
+          cur.close = c.close;
+          curVol += (c.volume || 0);
+        }
+        if (c.vwap) lastVwap = c.vwap;
+        if (c.cvd !== undefined) lastCvd = c.cvd;
+      }
+
+      if (cur) {
+        aggCandles.push(cur);
+        aggVolume.push({
+          time: cur.time,
+          value: curVol,
+          color: cur.close >= cur.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
+        });
+        if (lastVwap) {
+          aggVwap.push({ time: cur.time, value: lastVwap });
+          aggVwapUp.push({ time: cur.time, value: +(lastVwap + 1.8).toFixed(2) });
+          aggVwapDn.push({ time: cur.time, value: +(lastVwap - 1.8).toFixed(2) });
+        }
+        if (lastCvd !== null) {
+          aggCvd.push({ time: cur.time, value: lastCvd });
+        }
+      }
+
+      // Map markers to bucket
+      const seenMarkerBuckets = new Set();
+      for (const m of rawMarkers) {
+        const b = Math.floor(m.time / sec) * sec;
+        if (!seenMarkerBuckets.has(b)) {
+          seenMarkerBuckets.add(b);
+          aggMarkers.push({ ...m, time: b });
+        }
+      }
+
+      return {
+        candles: aggCandles,
+        volume: aggVolume,
+        vwap: aggVwap,
+        vwapUp: aggVwapUp,
+        vwapDn: aggVwapDn,
+        cvd: aggCvd,
+        markers: aggMarkers
+      };
+    }
+
+    function renderActiveData(preserveRange = true) {
+      if (!candleSeries) return;
+      const data = aggregateData(currentTf);
+
+      candleSeries.setData(data.candles);
+      volumeSeries.setData(data.volume);
+
+      if (showVwap) {
+        vwapSeries.setData(data.vwap);
+      } else {
+        vwapSeries.setData([]);
+      }
+
+      if (showBands) {
+        vwapUpSeries.setData(data.vwapUp);
+        vwapDnSeries.setData(data.vwapDn);
+      } else {
+        vwapUpSeries.setData([]);
+        vwapDnSeries.setData([]);
+      }
+
+      if (showCvd) {
+        cvdSeries.setData(data.cvd);
+      } else {
+        cvdSeries.setData([]);
+      }
+
+      if (showAbs) {
+        candleSeries.setMarkers(data.markers);
+      } else {
+        candleSeries.setMarkers([]);
+      }
+
+      if (!preserveRange) {
+        mainChart.timeScale().fitContent();
+        cvdChart.timeScale().fitContent();
+      }
+
+      updateHeaderOhlc(null);
+    }
+
+    function changeTimeframe(tf, btn) {
+      currentTf = tf;
+      document.querySelectorAll('.btn-tf').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      renderActiveData(false);
+    }
+
+    function toggleIndicator(type) {
+      if (type === 'vwap') {
+        showVwap = !showVwap;
+        document.getElementById('btnVwap').className = showVwap ? 'btn-tool active-gold' : 'btn-tool';
+      } else if (type === 'bands') {
+        showBands = !showBands;
+        document.getElementById('btnBands').className = showBands ? 'btn-tool active-cyan' : 'btn-tool';
+      } else if (type === 'cvd') {
+        showCvd = !showCvd;
+        const cvdEl = document.getElementById('cvd-chart');
+        cvdEl.style.display = showCvd ? 'block' : 'none';
+        document.getElementById('btnCvd').className = showCvd ? 'btn-tool active-cyan' : 'btn-tool';
+        window.dispatchEvent(new Event('resize'));
+      } else if (type === 'abs') {
+        showAbs = !showAbs;
+        document.getElementById('btnAbs').className = showAbs ? 'btn-tool active-green' : 'btn-tool';
+      }
+      renderActiveData(true);
+    }
+
+    function fitChart() {
+      if (mainChart) mainChart.timeScale().fitContent();
+      if (cvdChart) cvdChart.timeScale().fitContent();
+    }
+
+    function scrollToRealtime() {
+      if (mainChart) mainChart.timeScale().scrollToRealtime();
+      if (cvdChart) cvdChart.timeScale().scrollToRealtime();
+      const btn = document.getElementById('floating-live-btn');
+      if (btn) btn.style.display = 'none';
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    // Load initial data
+    async function loadHistory() {
+      try {
+        const res = await fetch('/api/chart_history');
+        const data = await res.json();
+        if (data.candles && data.candles.length > 0) {
+          rawCandles = data.candles;
+          rawVolume = data.volume || [];
+          rawVwap = data.vwap || [];
+          rawVwapUp = data.vwap_up || [];
+          rawVwapDn = data.vwap_dn || [];
+          rawCvd = data.cvd || [];
+          rawMarkers = data.markers || [];
+
+          renderActiveData(false);
+        }
+      } catch (err) {
+        console.error('Failed loading history:', err);
+      } finally {
+        const overlay = document.getElementById('loading-overlay');
+        if (overlay) overlay.style.display = 'none';
+      }
+    }
+
+    // Realtime live tick poller
+    async function pollLiveCandle() {
+      try {
+        const res = await fetch('/api/live_candle');
+        const data = await res.json();
+        if (data && data.time) {
+          // Update raw candles cache
+          const lastIdx = rawCandles.length - 1;
+          if (lastIdx >= 0 && rawCandles[lastIdx].time === data.time) {
+            rawCandles[lastIdx] = {
+              time: data.time, open: data.open, high: data.high, low: data.low, close: data.close,
+              volume: data.volume, vwap: data.vwap, cvd: data.cvd
+            };
+          } else if (lastIdx >= 0 && data.time > rawCandles[lastIdx].time) {
+            rawCandles.push({
+              time: data.time, open: data.open, high: data.high, low: data.low, close: data.close,
+              volume: data.volume, vwap: data.vwap, cvd: data.cvd
+            });
+          }
+
+          // If on 1M, update directly without full re-render
+          if (currentTf === 1) {
+            candleSeries.update({
+              time: data.time, open: data.open, high: data.high, low: data.low, close: data.close
+            });
+            volumeSeries.update({
+              time: data.time, value: data.volume,
+              color: data.close >= data.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
+            });
+            if (showVwap && data.vwap) {
+              vwapSeries.update({ time: data.time, value: data.vwap });
+            }
+            if (showBands && data.vwap_up && data.vwap_dn) {
+              vwapUpSeries.update({ time: data.time, value: data.vwap_up });
+              vwapDnSeries.update({ time: data.time, value: data.vwap_dn });
+            }
+            if (showCvd && data.cvd !== undefined) {
+              cvdSeries.update({ time: data.time, value: data.cvd });
+            }
+            updateHeaderOhlc(data);
+          } else {
+            // For multi-minute timeframe, aggregate the latest forming bar
+            const sec = currentTf * 60;
+            const bucket = Math.floor(data.time / sec) * sec;
+            const slice = rawCandles.filter(c => Math.floor(c.time / sec) * sec === bucket);
+            if (slice.length > 0) {
+              const aggC = {
+                time: bucket,
+                open: slice[0].open,
+                high: Math.max(...slice.map(s => s.high)),
+                low: Math.min(...slice.map(s => s.low)),
+                close: slice[slice.length - 1].close
+              };
+              const aggVol = slice.reduce((acc, s) => acc + (s.volume || 0), 0);
+              candleSeries.update(aggC);
+              volumeSeries.update({
+                time: bucket, value: aggVol,
+                color: aggC.close >= aggC.open ? 'rgba(0, 230, 118, 0.45)' : 'rgba(255, 59, 48, 0.45)'
+              });
+              if (showVwap && data.vwap) vwapSeries.update({ time: bucket, value: data.vwap });
+              if (showBands && data.vwap_up) {
+                vwapUpSeries.update({ time: bucket, value: data.vwap_up });
+                vwapDnSeries.update({ time: bucket, value: data.vwap_dn });
+              }
+              if (showCvd && data.cvd !== undefined) cvdSeries.update({ time: bucket, value: data.cvd });
+              updateHeaderOhlc(aggC);
+            }
+          }
+        }
+      } catch (err) {
+        // quiet error
+      }
+    }
+
+    // Launch
+    window.addEventListener('DOMContentLoaded', () => {
+      initCharts();
+      loadHistory();
+      setInterval(pollLiveCandle, 1000);
+    });
+  </script>
+</body>
+</html>
+"""
+
+server = app.server
+
+@server.route('/chart')
+def serve_tv_chart():
+    return render_template_string(TV_CHART_HTML)
+
+@server.route('/api/chart_history')
+def api_chart_history():
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        c = conn.cursor()
+        c.execute("""SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, absorption 
+                     FROM price_bars ORDER BY bar_time ASC""")
+        rows = c.fetchall()
+        conn.close()
+
+        candles, volume, vwap, vwap_up, vwap_dn, cvd, markers = [], [], [], [], [], [], []
+        seen_times = set()
+        now_cutoff_ts = int((datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)).replace(tzinfo=timezone.utc).timestamp())
+
+        for r in rows:
+            try:
+                dt = datetime.strptime(r[0], '%Y-%m-%d %H:%M:%S') if isinstance(r[0], str) else r[0]
+                ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+                if ts in seen_times or ts > now_cutoff_ts:
+                    continue
+                seen_times.add(ts)
+
+                op, hp, lp, cp = float(r[1]), float(r[2]), float(r[3]), float(r[4])
+                vol = float(r[5] or 0)
+                c_val = float(r[7] or 0)
+                v_val = float(r[8] or cp)
+                abs_text = r[10]
+
+                candles.append({'time': ts, 'open': op, 'high': hp, 'low': lp, 'close': cp})
+                volume.append({'time': ts, 'value': vol, 'color': 'rgba(0, 230, 118, 0.45)' if cp >= op else 'rgba(255, 59, 48, 0.45)'})
+                vwap.append({'time': ts, 'value': v_val})
+                vwap_up.append({'time': ts, 'value': round(v_val + 1.8, 2)})
+                vwap_dn.append({'time': ts, 'value': round(v_val - 1.8, 2)})
+                cvd.append({'time': ts, 'value': c_val})
+
+                if abs_text == 'Bullish Absorption':
+                    markers.append({'time': ts, 'position': 'belowBar', 'color': '#00E676', 'shape': 'arrowUp', 'text': '⚡ABS'})
+                elif abs_text == 'Bearish Absorption':
+                    markers.append({'time': ts, 'position': 'aboveBar', 'color': '#FF3B30', 'shape': 'arrowDown', 'text': '⚡ABS'})
+            except Exception:
+                continue
+
+        return jsonify({
+            'candles': candles,
+            'volume': volume,
+            'vwap': vwap,
+            'vwap_up': vwap_up,
+            'vwap_dn': vwap_dn,
+            'cvd': cvd,
+            'markers': markers
+        })
+    except Exception as e:
+        logger.error(f"Error serving chart history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@server.route('/api/live_candle')
+def api_live_candle():
+    with data_lock:
+        cb = dict(current_bar)
+        price = last_known_price
+        c_delta = cum_delta
+
+    try:
+        if cb.get('time') is not None and cb.get('open') is not None:
+            dt = datetime.strptime(cb['time'], '%Y-%m-%d %H:%M:%S') if isinstance(cb['time'], str) else cb['time']
+            ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+            cp = float(cb.get('close') or price)
+            op = float(cb.get('open') or price)
+            hp = float(cb.get('high') or price)
+            lp = float(cb.get('low') or price)
+            vol = float(cb.get('volume') or 0)
+            v_val = float(cb.get('vwap') or cp)
+            c_val = float(cb.get('cvd') or c_delta)
+            return jsonify({
+                'time': ts, 'open': op, 'high': hp, 'low': lp, 'close': cp,
+                'volume': vol, 'vwap': v_val, 'vwap_up': round(v_val + 1.8, 2),
+                'vwap_dn': round(v_val - 1.8, 2), 'cvd': c_val, 'price': price
+            })
+        else:
+            ts = int(datetime.now(timezone.utc).replace(second=0, microsecond=0).timestamp())
+            return jsonify({
+                'time': ts, 'open': price, 'high': price, 'low': price, 'close': price,
+                'volume': 0, 'vwap': price, 'vwap_up': round(price + 1.8, 2),
+                'vwap_dn': round(price - 1.8, 2), 'cvd': c_delta, 'price': price
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 app.layout = html.Div(
     id="terminal-container",
     style={
@@ -961,18 +1773,12 @@ app.layout = html.Div(
                     style={"flex": "1 1 680px", "minWidth": "320px", "display": "flex", "flexDirection": "column", "gap": "8px"},
                     children=[
                         html.Div(
-                            style={"backgroundColor": "#0D1117", "border": "1px solid #21262D", "borderRadius": "4px", "padding": "4px"},
+                            style={"backgroundColor": "#0A0D14", "border": "1px solid #21262D", "borderRadius": "4px", "padding": "0", "overflow": "hidden"},
                             children=[
-                                dcc.Graph(
-                                    id="main-terminal-chart",
-                                    config={
-                                        "scrollZoom": True,
-                                        "displayModeBar": True,
-                                        "displaylogo": False,
-                                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-                                        "responsive": True
-                                    },
-                                    style={"height": "560px", "minHeight": "420px", "touchAction": "pan-y"}
+                                html.Iframe(
+                                    id="main-terminal-chart-frame",
+                                    src="/chart",
+                                    style={"width": "100%", "height": "590px", "border": "none", "display": "block"}
                                 )
                             ]
                         )
@@ -1072,7 +1878,6 @@ app.layout = html.Div(
         Output("low-box", "children"),
         Output("session-box", "children"),
         Output("phase-box", "children"),
-        Output("main-terminal-chart", "figure"),
         Output("dom-ladder-content", "children"),
         Output("tape-content", "children"),
         Output("blotter-summary-stats", "children"),
@@ -1163,153 +1968,8 @@ def update_terminal_ui(n):
         html.Div(phase_sub, style={"fontSize": "10px", "color": "#FFD700" if not last_absrp else "#00E676"})
     ]
 
-    # 3. Main Candlestick + Footprint + CVD + SMC Overlays (TradingView Style)
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        vertical_spacing=0.03, row_heights=[0.75, 0.25]
-    )
+    # 3. DOM Ladder Rendering
 
-    if bars:
-        df = pd.DataFrame(bars)
-        df['dt'] = pd.to_datetime(df['time'])
-        df = df.sort_values('dt').drop_duplicates(subset=['dt']).reset_index(drop=True)
-        now_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
-        df = df[df['dt'] <= now_cutoff].reset_index(drop=True)
-
-        # True Institutional Dynamic VWAP
-        typical_price = (df['high'] + df['low'] + df['close']) / 3
-        cum_pv_series = (typical_price * df['volume']).cumsum()
-        cum_vol_series = df['volume'].cumsum()
-        df['vwap'] = np.where(cum_vol_series > 0, (cum_pv_series / cum_vol_series).round(2), df['close'])
-
-        # Candlestick
-        fig.add_trace(
-            go.Candlestick(
-                x=df['dt'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
-                name="XAUUSD",
-                increasing_line_color="#00E676", decreasing_line_color="#FF3B30",
-                increasing_fillcolor="#00E676", decreasing_fillcolor="#FF3B30"
-            ),
-            row=1, col=1
-        )
-
-        # Institutional VWAP and Bands
-        fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['vwap'], name="VWAP", line=dict(color="#FFD700", width=1.8)),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['vwap'] + 1.8, name="VWAP +1.5σ", line=dict(color="#FF9F0A", width=1, dash="dot")),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['vwap'] - 1.8, name="VWAP -1.5σ", line=dict(color="#00F0FF", width=1, dash="dot")),
-            row=1, col=1
-        )
-
-        # SMC Absorption Markers (Clean & High-Precision)
-        abs_x, abs_y, abs_text, abs_color = [], [], [], []
-        for _, b in df.iterrows():
-            if b.get('absorption') == 'Bullish Absorption':
-                abs_x.append(b['dt'])
-                abs_y.append(b['low'] - 0.45)
-                abs_text.append("⚡ABS")
-                abs_color.append("#00E676")
-            elif b.get('absorption') == 'Bearish Absorption':
-                abs_x.append(b['dt'])
-                abs_y.append(b['high'] + 0.45)
-                abs_text.append("⚡ABS")
-                abs_color.append("#FF3B30")
-
-        if abs_x:
-            fig.add_trace(
-                go.Scatter(
-                    x=abs_x, y=abs_y, mode="text", text=abs_text,
-                    textfont=dict(color=abs_color, size=9, family="monospace"),
-                    name="⚡ Absorption",
-                    showlegend=False
-                ),
-                row=1, col=1
-            )
-
-        # Live Price Horizontal Dash Line on Price Axis
-        fig.add_hline(
-            y=price,
-            line=dict(color="#FFD700", width=1.5, dash="dash"),
-            annotation_text=f"  LIVE: ${price:.2f}",
-            annotation_position="right",
-            annotation_font=dict(color="#FFD700", size=11, family="monospace"),
-            row=1, col=1
-        )
-
-        # CVD Sub-chart
-        fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['cvd'], name="CVD", line=dict(color="#00F0FF", width=2), fill="tozeroy", fillcolor="rgba(0, 240, 255, 0.08)"),
-            row=2, col=1
-        )
-
-        last_dt = df['dt'].iloc[-1]
-        start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
-        if start_dt >= last_dt:
-            start_dt = last_dt - pd.Timedelta(hours=1)
-        end_dt = last_dt + pd.Timedelta(minutes=5)
-
-        fig.update_xaxes(
-            type="date",
-            range=[start_dt, end_dt],
-            showgrid=True, gridcolor="#161B22",
-            showline=True, linecolor="#30363D",
-            showspikes=True, spikemode="across", spikesnap="cursor",
-            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
-            fixedrange=False,
-            rangeselector=dict(
-                buttons=[
-                    dict(count=15, label="15M", step="minute", stepmode="backward"),
-                    dict(count=30, label="30M", step="minute", stepmode="backward"),
-                    dict(count=1, label="1H", step="hour", stepmode="backward"),
-                    dict(count=4, label="4H", step="hour", stepmode="backward"),
-                    dict(count=12, label="12H", step="hour", stepmode="backward"),
-                    dict(count=1, label="1D", step="day", stepmode="backward"),
-                    dict(step="all", label="ALL")
-                ],
-                bgcolor="#161B22",
-                activecolor="#1F6FEB",
-                bordercolor="#30363D",
-                borderwidth=1,
-                font=dict(color="#C9D1D9", size=10, family="monospace"),
-                x=0.0, y=1.03, xanchor="left", yanchor="bottom"
-            ),
-            rangeslider=dict(visible=False),
-            row=1, col=1
-        )
-        fig.update_xaxes(
-            type="date",
-            showgrid=True, gridcolor="#161B22",
-            showline=True, linecolor="#30363D",
-            showspikes=True, spikemode="across", spikesnap="cursor",
-            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
-            fixedrange=False,
-            row=2, col=1
-        )
-        fig.update_yaxes(
-            showgrid=True, gridcolor="#161B22", side="right",
-            showline=True, linecolor="#30363D",
-            showspikes=True, spikemode="across", spikesnap="cursor",
-            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
-            fixedrange=False
-        )
-
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#0D1117",
-        plot_bgcolor="#0A0D14",
-        margin=dict(l=10, r=40, t=25, b=10),
-        showlegend=False,
-        dragmode="pan",
-        uirevision="tradingview_user_zoom"
-    )
-
-    # 4. DOM Ladder Rendering
     dom_rows = []
     for ask in book.get('asks', [])[:5]:
         dom_rows.append(
@@ -1425,7 +2085,7 @@ def update_terminal_ui(n):
 
     return (
         clocks_text, mt5_badge, risk_badge, price_box, spread_box, high_box, low_box, session_box, phase_box,
-        fig, dom_rows, tape_items, blotter_stats, table
+        dom_rows, tape_items, blotter_stats, table
     )
 
 
