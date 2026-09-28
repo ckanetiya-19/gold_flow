@@ -427,8 +427,8 @@ def process_tick(price, size, is_buy, source_label="WS"):
             # Real-time Trailing SL & Exit Check
             manage_active_trade(price)
 
-            now_dt = datetime.now()
-            current_minute = now_dt.replace(second=0, microsecond=0)
+            now_dt = datetime.now(timezone.utc)
+            current_minute = now_dt.replace(second=0, microsecond=0, tzinfo=None)
             lvl = round(price, 1)
 
             if current_bar["time"] is None or current_bar["time"] < current_minute:
@@ -971,7 +971,7 @@ def bootstrap_bars():
             with data_lock:
                 historical_bars.clear()
                 for k in r.json():
-                    t = datetime.fromtimestamp(k[0] / 1000).replace(second=0, microsecond=0)
+                    t = datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
                     op, hi, lo, cl = float(k[1]), float(k[2]), float(k[3]), float(k[4])
                     vol = float(k[5])
                     d = float(k[9]) - (vol - float(k[9]))
@@ -1306,6 +1306,9 @@ def update_quant_terminal_ui(n):
     if bars:
         df = pd.DataFrame(bars)
         df['dt'] = pd.to_datetime(df['time'])
+        df = df.sort_values('dt').drop_duplicates(subset=['dt']).reset_index(drop=True)
+        now_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
+        df = df[df['dt'] <= now_cutoff].reset_index(drop=True)
 
         # Dynamic VWAP & Bands
         typical_price = (df['high'] + df['low'] + df['close']) / 3.0
@@ -1417,6 +1420,8 @@ def update_quant_terminal_ui(n):
 
         last_dt = df['dt'].iloc[-1]
         start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
+        if start_dt >= last_dt:
+            start_dt = last_dt - pd.Timedelta(hours=1)
         end_dt = last_dt + pd.Timedelta(minutes=5)
 
         fig.update_xaxes(

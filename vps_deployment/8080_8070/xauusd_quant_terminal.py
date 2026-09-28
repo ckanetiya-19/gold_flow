@@ -214,7 +214,7 @@ def _fetch_binance_klines():
                 cum_pv = 0.0
                 cum_delta = 0.0
                 for k in klines:
-                    bt = datetime.fromtimestamp(k[0] / 1000).replace(second=0, microsecond=0)
+                    bt = datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
                     op, hp, lp, cp = float(k[1]), float(k[2]), float(k[3]), float(k[4])
                     vol = float(k[5])
                     taker_buy = float(k[9])
@@ -486,8 +486,8 @@ def process_tick(price, volume, is_buy):
         cum_pv += price * volume
         vwap = cum_pv / cum_vol if cum_vol > 0 else price
 
-        now = datetime.now()
-        current_minute = now.replace(second=0, microsecond=0)
+        now_utc = datetime.now(timezone.utc)
+        current_minute = now_utc.replace(second=0, microsecond=0, tzinfo=None)
 
         with data_lock:
             update_dom_and_tape(price, volume, is_buy)
@@ -1341,6 +1341,9 @@ def update_quant_terminal(n):
     if bars:
         df = pd.DataFrame(bars)
         df['dt'] = pd.to_datetime(df['time'])
+        df = df.sort_values('dt').drop_duplicates(subset=['dt']).reset_index(drop=True)
+        now_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
+        df = df[df['dt'] <= now_cutoff].reset_index(drop=True)
 
         # Dynamic Cumulative VWAP & Bands
         typical_price = (df['high'] + df['low'] + df['close']) / 3.0
@@ -1452,6 +1455,8 @@ def update_quant_terminal(n):
 
         last_dt = df['dt'].iloc[-1]
         start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
+        if start_dt >= last_dt:
+            start_dt = last_dt - pd.Timedelta(hours=1)
         end_dt = last_dt + pd.Timedelta(minutes=5)
 
         fig.update_xaxes(
