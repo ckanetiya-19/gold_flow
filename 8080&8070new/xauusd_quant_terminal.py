@@ -201,8 +201,52 @@ def save_bar_to_db(bar):
         logger.error(f"Bar save error: {e}")
 
 
+def _fetch_binance_klines():
+    global historical_bars, cum_vol, cum_pv, cum_delta, last_known_price, market_meta
+    try:
+        r = requests.get('https://api.binance.com/api/v3/klines',
+                         params={'symbol': 'PAXGUSDT', 'interval': '1m', 'limit': 1000}, timeout=10)
+        if r.status_code == 200:
+            klines = r.json()
+            with data_lock:
+                historical_bars.clear()
+                cum_vol = 0.0
+                cum_pv = 0.0
+                cum_delta = 0.0
+                for k in klines:
+                    bt = datetime.fromtimestamp(k[0] / 1000).replace(second=0, microsecond=0)
+                    op, hp, lp, cp = float(k[1]), float(k[2]), float(k[3]), float(k[4])
+                    vol = float(k[5])
+                    taker_buy = float(k[9])
+                    delta = taker_buy - (vol - taker_buy)
+                    cum_delta += delta
+                    cum_vol += vol
+                    cum_pv += ((op + hp + lp + cp) / 4) * vol
+                    vwap = round(cum_pv / cum_vol, 2) if cum_vol > 0 else cp
+                    bar = {
+                        'time': bt, 'open': op, 'high': hp, 'low': lp, 'close': cp,
+                        'volume': vol, 'delta': delta, 'cvd': cum_delta, 'vwap': vwap,
+                        'poc': round((hp + lp) / 2, 2), 'imbalance': False, 'fvg': None,
+                        'phase': "Distribution" if delta > 0 else "Accumulation",
+                        'confidence': 55, 'absorption': None, 'cvd_divergence': None,
+                        'signal_type': 'NONE', 'session': get_session_info()['name'], 'levels': {round(cp, 1): vol}
+                    }
+                    historical_bars.append(bar)
+                    save_bar_to_db(bar)
+                if historical_bars:
+                    last_known_price = historical_bars[-1]['close']
+                    market_meta['open'] = historical_bars[0]['open']
+                    market_meta['high'] = max(b['high'] for b in historical_bars)
+                    market_meta['low'] = min(b['low'] for b in historical_bars)
+                    market_meta['bid'] = last_known_price - 0.2
+                    market_meta['ask'] = last_known_price + 0.2
+            logger.info(f"✅ Quant Binance fallback: Loaded {len(historical_bars)} continuous bars. Last: ${last_known_price:.2f}")
+    except Exception as e:
+        logger.error(f"Quant Binance fetch failed: {e}")
+
+
 def load_initial_bars():
-    """Load continuous bars from Quant DB, Terminal DB, or V2 DB"""
+    """Load continuous bars from Quant DB, Terminal DB, or V2 DB, falling back to Binance 1000 bars."""
     global historical_bars, cum_vol, cum_pv, cum_delta, last_known_price, market_meta
     source_db = None
     for test_path in [DB_PATH, TERMINAL_DB_PATH, V2_DB_PATH]:
@@ -211,7 +255,7 @@ def load_initial_bars():
                 c = sqlite3.connect(test_path)
                 cnt = c.execute("SELECT COUNT(*) FROM price_bars").fetchone()[0]
                 c.close()
-                if cnt > 10:
+                if cnt >= 500:
                     source_db = test_path
                     break
             except Exception:
@@ -222,7 +266,7 @@ def load_initial_bars():
         try:
             conn = sqlite3.connect(source_db)
             rows = conn.execute('''SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, phase, confidence, signal_type, session, imbalance, fvg, absorption, cvd_divergence 
-                                   FROM price_bars ORDER BY bar_time ASC''').fetchall()
+                                   FROM price_bars ORDER BY bar_time DESC LIMIT 1500''').fetchall()
             conn.close()
 
             with data_lock:
@@ -231,7 +275,7 @@ def load_initial_bars():
                 cum_pv = 0.0
                 cum_delta = 0.0
 
-                for r in rows:
+                for r in reversed(rows):
                     try:
                         b_time = datetime.strptime(r[0], '%Y-%m-%d %H:%M:%S')
                     except Exception:
@@ -245,25 +289,22 @@ def load_initial_bars():
                         'levels': {round(float(r[4]), 1): float(r[5])}
                     }
                     historical_bars.append(bar)
-                    if b_time.date() == datetime.now().date():
-                        cum_vol += bar['volume']
-                        cum_pv += ((bar['high'] + bar['low'] + bar['close']) / 3.0) * bar['volume']
-                        cum_delta += bar['delta']
-
-                if cum_vol == 0.0 and historical_bars:
-                    for b in historical_bars[-200:]:
-                        cum_vol += b['volume']
-                        cum_pv += ((b['high'] + b['low'] + b['close']) / 3.0) * b['volume']
-                        cum_delta += b['delta']
+                    cum_vol += bar['volume']
+                    cum_pv += ((bar['high'] + bar['low'] + bar['close']) / 3.0) * bar['volume']
+                    cum_delta += bar['delta']
 
                 if historical_bars:
                     last_known_price = historical_bars[-1]['close']
                     market_meta['high'] = max(b['high'] for b in historical_bars)
                     market_meta['low'] = min(b['low'] for b in historical_bars)
                     market_meta['open'] = historical_bars[0]['open']
-                    logger.info(f"Loaded {len(historical_bars)} continuous bars successfully.")
+                    logger.info(f"Loaded {len(historical_bars)} continuous bars successfully from DB.")
+                    return
         except Exception as e:
             logger.error(f"Initial bars load error: {e}")
+
+    logger.info("Database has insufficient bars, bootstrapping 1000 continuous bars from Binance API...")
+    _fetch_binance_klines()
 
     # Load trade history
     try:
@@ -458,7 +499,7 @@ def process_tick(price, volume, is_buy):
                     final_bar = finalize_bar(current_bar, vwap)
                     historical_bars.append(final_bar)
                     save_bar_to_db(final_bar)
-                    if len(historical_bars) > 300:
+                    if len(historical_bars) > 2000:
                         historical_bars.pop(0)
                     
                     # Evaluate Dual Engines
@@ -1165,7 +1206,7 @@ def handle_manual_cut(n_clicks):
 )
 def update_quant_terminal(n):
     with data_lock:
-        bars = list(historical_bars)[-100:] if len(historical_bars) > 100 else list(historical_bars)
+        bars = list(historical_bars)
         price = last_known_price
         meta = dict(market_meta)
         tape = list(recent_tape)
@@ -1297,14 +1338,9 @@ def update_quant_terminal(n):
     ]
 
     # 5. Main Candlestick + Footprint + CVD Figure
-    if len(bars) > 100:
-        display_bars = bars[-100:]
-    else:
-        display_bars = bars
-
-    if display_bars:
-        df = pd.DataFrame(display_bars)
-        df['time_str'] = df['time'].apply(lambda x: x.strftime('%H:%M') if isinstance(x, datetime) else str(x)[-8:-3])
+    if bars:
+        df = pd.DataFrame(bars)
+        df['dt'] = pd.to_datetime(df['time'])
 
         # Dynamic Cumulative VWAP & Bands
         typical_price = (df['high'] + df['low'] + df['close']) / 3.0
@@ -1328,7 +1364,7 @@ def update_quant_terminal(n):
         # 1. Candlestick
         fig.add_trace(
             go.Candlestick(
-                x=df['time_str'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                x=df['dt'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
                 name="XAUUSD",
                 increasing_line_color="#00E676", decreasing_line_color="#FF3366",
                 increasing_fillcolor="rgba(0,230,118,0.3)", decreasing_fillcolor="rgba(255,51,102,0.3)",
@@ -1339,19 +1375,19 @@ def update_quant_terminal(n):
 
         # 2. VWAP (Yellow)
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap'], mode="lines", name="VWAP", line=dict(color="#FFD700", width=2)),
+            go.Scatter(x=df['dt'], y=df['vwap'], mode="lines", name="VWAP", line=dict(color="#FFD700", width=2)),
             row=1, col=1
         )
 
         # 3. Upper Band (+1.28σ Dotted Orange)
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap_upper'], mode="lines", name="Upper Band (+1.28σ)", line=dict(color="#FF9800", width=1.5, dash="dot")),
+            go.Scatter(x=df['dt'], y=df['vwap_upper'], mode="lines", name="Upper Band (+1.28σ)", line=dict(color="#FF9800", width=1.5, dash="dot")),
             row=1, col=1
         )
 
         # 4. Lower Band (-1.28σ Dashed Cyan)
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap_lower'], mode="lines", name="Lower Band (-1.28σ)", line=dict(color="#00F0FF", width=1.5, dash="dash")),
+            go.Scatter(x=df['dt'], y=df['vwap_lower'], mode="lines", name="Lower Band (-1.28σ)", line=dict(color="#00F0FF", width=1.5, dash="dash")),
             row=1, col=1
         )
 
@@ -1360,31 +1396,22 @@ def update_quant_terminal(n):
         if not imb_df.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=imb_df['time_str'], y=imb_df['high'] * 1.0001, mode='markers',
+                    x=imb_df['dt'], y=imb_df['high'] * 1.0001, mode='markers',
                     marker=dict(symbol='star', size=11, color='#00E5FF'), name='⚡ Imbalance'
                 ), row=1, col=1
             )
 
-        # Position Markers — TEMPORARILY HIDDEN (uncomment to restore)
-        # if pos.get('in_position'):
-        #     ep = pos['entry_price']
-        #     sl = pos['stop_loss']
-        #     tp = pos['take_profit']
-        #     fig.add_hline(y=ep, line_color="#38BDF8", line_width=2, line_dash="dash", row=1, col=1, annotation_text=f"ENTRY ${ep:.2f}")
-        #     fig.add_hline(y=sl, line_color="#FF3366", line_width=2, line_dash="dot", row=1, col=1, annotation_text=f"SL ${sl:.2f}")
-        #     fig.add_hline(y=tp, line_color="#00E676", line_width=2, line_dash="dot", row=1, col=1, annotation_text=f"TP ${tp:.2f}")
-
         # Row 2: Volume Delta
         delta_colors = ["#00E676" if d >= 0 else "#FF3366" for d in df['delta']]
         fig.add_trace(
-            go.Bar(x=df['time_str'], y=df['delta'], name="Delta", marker_color=delta_colors, showlegend=False),
+            go.Bar(x=df['dt'], y=df['delta'], name="Delta", marker_color=delta_colors, showlegend=False),
             row=2, col=1
         )
 
         # Row 3: CVD
         fig.add_trace(
             go.Scatter(
-                x=df['time_str'], y=df['cvd'], mode="lines", name="CVD",
+                x=df['dt'], y=df['cvd'], mode="lines", name="CVD",
                 line=dict(color="#38BDF8", width=2),
                 fill="tozeroy", fillcolor="rgba(56,189,248,0.15)", showlegend=False
             ),
@@ -1395,12 +1422,12 @@ def update_quant_terminal(n):
         abs_x, abs_y, abs_text, abs_color = [], [], [], []
         for _, b in df.iterrows():
             if b.get('absorption') == 'Bullish Absorption':
-                abs_x.append(b['time_str'])
+                abs_x.append(b['dt'])
                 abs_y.append(b['low'] - 0.45)
                 abs_text.append("⚡ABS")
                 abs_color.append("#00E676")
             elif b.get('absorption') == 'Bearish Absorption':
-                abs_x.append(b['time_str'])
+                abs_x.append(b['dt'])
                 abs_y.append(b['high'] + 0.45)
                 abs_text.append("⚡ABS")
                 abs_color.append("#FF3366")
@@ -1423,19 +1450,74 @@ def update_quant_terminal(n):
             annotation_font=dict(color="#FFD700", size=11, family="monospace")
         )
 
-        fig.update_xaxes(type='category', showgrid=True, gridcolor="#131C2E", tickfont=dict(size=9, color="#94A3B8"), fixedrange=False)
-        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=10, color="#94A3B8"), fixedrange=False)
+        last_dt = df['dt'].iloc[-1]
+        start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
+        end_dt = last_dt + pd.Timedelta(minutes=5)
+
+        fig.update_xaxes(
+            type="date",
+            range=[start_dt, end_dt],
+            showgrid=True, gridcolor="#131C2E",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            rangeselector=dict(
+                buttons=[
+                    dict(count=15, label="15M", step="minute", stepmode="backward"),
+                    dict(count=30, label="30M", step="minute", stepmode="backward"),
+                    dict(count=1, label="1H", step="hour", stepmode="backward"),
+                    dict(count=4, label="4H", step="hour", stepmode="backward"),
+                    dict(count=12, label="12H", step="hour", stepmode="backward"),
+                    dict(count=1, label="1D", step="day", stepmode="backward"),
+                    dict(step="all", label="ALL")
+                ],
+                bgcolor="#0D1117",
+                activecolor="#1F6FEB",
+                bordercolor="#30363D",
+                borderwidth=1,
+                font=dict(color="#C9D1D9", size=10, family="monospace"),
+                x=0.0, y=1.03, xanchor="left", yanchor="bottom"
+            ),
+            rangeslider=dict(visible=False),
+            row=1, col=1
+        )
+        fig.update_xaxes(
+            type="date",
+            showgrid=True, gridcolor="#131C2E",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            row=2, col=1
+        )
+        fig.update_xaxes(
+            type="date",
+            showgrid=True, gridcolor="#131C2E",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            row=3, col=1
+        )
+        fig.update_yaxes(
+            showgrid=True, gridcolor="#131C2E", side="right",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False
+        )
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor="#0A0E17",
             plot_bgcolor="#0A0E17",
-            margin=dict(l=10, r=40, t=10, b=10),
+            margin=dict(l=10, r=40, t=25, b=10),
             xaxis_rangeslider_visible=False,
-            height=550,
+            height=560,
             showlegend=True,
             dragmode="pan",
-            uirevision="constant_zoom_state",
-            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10, color="#94A3B8"))
+            uirevision="tradingview_user_zoom",
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1.0, font=dict(size=10, color="#94A3B8"))
         )
     else:
         fig = go.Figure()

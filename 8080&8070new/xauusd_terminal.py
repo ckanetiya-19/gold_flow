@@ -202,7 +202,7 @@ def save_bar_to_db(bar):
 
 
 def load_initial_bars():
-    """Check Terminal DB first, then fall back to V2 DB (continuity)."""
+    """Check Terminal DB first, then fall back to Binance 1000 continuous bars."""
     global historical_bars, cum_vol, cum_pv, cum_delta, last_known_price, market_meta
     
     bars = _fetch_bars_from_db(DB_PATH)
@@ -210,9 +210,9 @@ def load_initial_bars():
         logger.info("Terminal DB is fresh, loading existing historical bars from V2 database...")
         bars = _fetch_bars_from_db(V2_DB_PATH)
     
-    if bars and len(bars) >= 10:
+    if bars and len(bars) >= 500:
         with data_lock:
-            historical_bars = bars[-200:]
+            historical_bars = bars[-1500:]
             cum_vol = sum(b['volume'] for b in historical_bars)
             cum_delta = historical_bars[-1].get('cvd', 0)
             avg_price = np.mean([(b['open'] + b['high'] + b['low'] + b['close']) / 4 for b in historical_bars])
@@ -223,9 +223,10 @@ def load_initial_bars():
             market_meta['low'] = min(b['low'] for b in historical_bars)
             market_meta['bid'] = last_known_price - 0.2
             market_meta['ask'] = last_known_price + 0.2
-        logger.info(f"✅ Terminal restored {len(historical_bars)} bars. Last: ${last_known_price:.2f}")
+        logger.info(f"✅ Terminal restored {len(historical_bars)} bars from DB. Last: ${last_known_price:.2f}")
         return
 
+    logger.info("Database has fewer than 500 bars, bootstrapping 1000 continuous bars from Binance API...")
     _fetch_binance_klines()
 
 
@@ -234,7 +235,7 @@ def _fetch_bars_from_db(db_file):
         conn = sqlite3.connect(db_file, timeout=5)
         c = conn.cursor()
         c.execute('''SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, phase, confidence, signal_type, session, imbalance, fvg, absorption, cvd_divergence
-                     FROM price_bars ORDER BY bar_time DESC LIMIT 200''')
+                     FROM price_bars ORDER BY bar_time DESC LIMIT 1500''')
         rows = c.fetchall()
         conn.close()
         bars = []
@@ -254,10 +255,10 @@ def _fetch_bars_from_db(db_file):
 
 
 def _fetch_binance_klines():
-    global historical_bars, cum_vol, cum_pv, cum_delta, last_known_price
+    global historical_bars, cum_vol, cum_pv, cum_delta, last_known_price, market_meta
     try:
         r = requests.get('https://api.binance.com/api/v3/klines',
-                         params={'symbol': 'PAXGUSDT', 'interval': '1m', 'limit': 120}, timeout=10)
+                         params={'symbol': 'PAXGUSDT', 'interval': '1m', 'limit': 1000}, timeout=10)
         if r.status_code == 200:
             klines = r.json()
             with data_lock:
@@ -285,8 +286,14 @@ def _fetch_binance_klines():
                     }
                     historical_bars.append(bar)
                     save_bar_to_db(bar)
-                last_known_price = historical_bars[-1]['close']
-            logger.info(f"✅ Binance fallback: Loaded {len(historical_bars)} bars. Last: ${last_known_price:.2f}")
+                if historical_bars:
+                    last_known_price = historical_bars[-1]['close']
+                    market_meta['open'] = historical_bars[0]['open']
+                    market_meta['high'] = max(b['high'] for b in historical_bars)
+                    market_meta['low'] = min(b['low'] for b in historical_bars)
+                    market_meta['bid'] = last_known_price - 0.2
+                    market_meta['ask'] = last_known_price + 0.2
+            logger.info(f"✅ Binance fallback: Loaded {len(historical_bars)} continuous bars. Last: ${last_known_price:.2f}")
     except Exception as e:
         logger.error(f"Binance fetch failed: {e}")
 
@@ -384,7 +391,7 @@ def process_tick(price, volume, is_buy):
                     final_bar = finalize_bar(current_bar, vwap)
                     historical_bars.append(final_bar)
                     save_bar_to_db(final_bar)
-                    if len(historical_bars) > 200:
+                    if len(historical_bars) > 2000:
                         historical_bars.pop(0)
                     check_terminal_trade_signals(final_bar)
 
@@ -1075,7 +1082,7 @@ app.layout = html.Div(
 )
 def update_terminal_ui(n):
     with data_lock:
-        bars = list(historical_bars)[-100:] if len(historical_bars) > 100 else list(historical_bars)
+        bars = list(historical_bars)
         price = last_known_price
         meta = dict(market_meta)
         tape = list(recent_tape)
@@ -1156,7 +1163,7 @@ def update_terminal_ui(n):
         html.Div(phase_sub, style={"fontSize": "10px", "color": "#FFD700" if not last_absrp else "#00E676"})
     ]
 
-    # 3. Main Candlestick + Footprint + CVD + SMC Overlays
+    # 3. Main Candlestick + Footprint + CVD + SMC Overlays (TradingView Style)
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
         vertical_spacing=0.03, row_heights=[0.75, 0.25]
@@ -1164,7 +1171,7 @@ def update_terminal_ui(n):
 
     if bars:
         df = pd.DataFrame(bars)
-        df['time_str'] = pd.to_datetime(df['time']).dt.strftime('%H:%M')
+        df['dt'] = pd.to_datetime(df['time'])
 
         # True Institutional Dynamic VWAP
         typical_price = (df['high'] + df['low'] + df['close']) / 3
@@ -1175,7 +1182,7 @@ def update_terminal_ui(n):
         # Candlestick
         fig.add_trace(
             go.Candlestick(
-                x=df['time_str'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                x=df['dt'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
                 name="XAUUSD",
                 increasing_line_color="#00E676", decreasing_line_color="#FF3B30",
                 increasing_fillcolor="#00E676", decreasing_fillcolor="#FF3B30"
@@ -1185,15 +1192,15 @@ def update_terminal_ui(n):
 
         # Institutional VWAP and Bands
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap'], name="VWAP", line=dict(color="#FFD700", width=1.8)),
+            go.Scatter(x=df['dt'], y=df['vwap'], name="VWAP", line=dict(color="#FFD700", width=1.8)),
             row=1, col=1
         )
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap'] + 1.8, name="VWAP +1.5σ", line=dict(color="#FF9F0A", width=1, dash="dot")),
+            go.Scatter(x=df['dt'], y=df['vwap'] + 1.8, name="VWAP +1.5σ", line=dict(color="#FF9F0A", width=1, dash="dot")),
             row=1, col=1
         )
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap'] - 1.8, name="VWAP -1.5σ", line=dict(color="#00F0FF", width=1, dash="dot")),
+            go.Scatter(x=df['dt'], y=df['vwap'] - 1.8, name="VWAP -1.5σ", line=dict(color="#00F0FF", width=1, dash="dot")),
             row=1, col=1
         )
 
@@ -1201,12 +1208,12 @@ def update_terminal_ui(n):
         abs_x, abs_y, abs_text, abs_color = [], [], [], []
         for _, b in df.iterrows():
             if b.get('absorption') == 'Bullish Absorption':
-                abs_x.append(b['time_str'])
+                abs_x.append(b['dt'])
                 abs_y.append(b['low'] - 0.45)
                 abs_text.append("⚡ABS")
                 abs_color.append("#00E676")
             elif b.get('absorption') == 'Bearish Absorption':
-                abs_x.append(b['time_str'])
+                abs_x.append(b['dt'])
                 abs_y.append(b['high'] + 0.45)
                 abs_text.append("⚡ABS")
                 abs_color.append("#FF3B30")
@@ -1234,22 +1241,67 @@ def update_terminal_ui(n):
 
         # CVD Sub-chart
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['cvd'], name="CVD", line=dict(color="#00F0FF", width=2), fill="tozeroy", fillcolor="rgba(0, 240, 255, 0.08)"),
+            go.Scatter(x=df['dt'], y=df['cvd'], name="CVD", line=dict(color="#00F0FF", width=2), fill="tozeroy", fillcolor="rgba(0, 240, 255, 0.08)"),
             row=2, col=1
+        )
+
+        last_dt = df['dt'].iloc[-1]
+        start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
+        end_dt = last_dt + pd.Timedelta(minutes=5)
+
+        fig.update_xaxes(
+            type="date",
+            range=[start_dt, end_dt],
+            showgrid=True, gridcolor="#161B22",
+            showline=True, linecolor="#30363D",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            rangeselector=dict(
+                buttons=[
+                    dict(count=15, label="15M", step="minute", stepmode="backward"),
+                    dict(count=30, label="30M", step="minute", stepmode="backward"),
+                    dict(count=1, label="1H", step="hour", stepmode="backward"),
+                    dict(count=4, label="4H", step="hour", stepmode="backward"),
+                    dict(count=12, label="12H", step="hour", stepmode="backward"),
+                    dict(count=1, label="1D", step="day", stepmode="backward"),
+                    dict(step="all", label="ALL")
+                ],
+                bgcolor="#161B22",
+                activecolor="#1F6FEB",
+                bordercolor="#30363D",
+                borderwidth=1,
+                font=dict(color="#C9D1D9", size=10, family="monospace"),
+                x=0.0, y=1.03, xanchor="left", yanchor="bottom"
+            ),
+            rangeslider=dict(visible=False),
+            row=1, col=1
+        )
+        fig.update_xaxes(
+            type="date",
+            showgrid=True, gridcolor="#161B22",
+            showline=True, linecolor="#30363D",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            row=2, col=1
+        )
+        fig.update_yaxes(
+            showgrid=True, gridcolor="#161B22", side="right",
+            showline=True, linecolor="#30363D",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False
         )
 
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0D1117",
         plot_bgcolor="#0A0D14",
-        margin=dict(l=10, r=40, t=10, b=10),
+        margin=dict(l=10, r=40, t=25, b=10),
         showlegend=False,
         dragmode="pan",
-        uirevision="constant_zoom_state",
-        xaxis=dict(type='category', showgrid=True, gridcolor="#161B22", rangeslider=dict(visible=False), nticks=15, fixedrange=False),
-        yaxis=dict(showgrid=True, gridcolor="#161B22", side="right", fixedrange=False),
-        xaxis2=dict(type='category', showgrid=True, gridcolor="#161B22", nticks=15, fixedrange=False),
-        yaxis2=dict(showgrid=True, gridcolor="#161B22", side="right", fixedrange=False)
+        uirevision="tradingview_user_zoom"
     )
 
     # 4. DOM Ladder Rendering
