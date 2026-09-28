@@ -1023,7 +1023,8 @@ app = dash.Dash(
     __name__,
     title="GOLD.FLOW // AI Quant Stream Terminal (XAUUSD)",
     update_title=None,
-    suppress_callback_exceptions=True
+    suppress_callback_exceptions=True,
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
 
 app.layout = html.Div(
@@ -1032,13 +1033,11 @@ app.layout = html.Div(
         "backgroundColor": "#070A0F",
         "color": "#E2E8F0",
         "fontFamily": "'Segoe UI', 'Consolas', -apple-system, sans-serif",
-        "height": "100vh",
-        "maxHeight": "100vh",
-        "overflow": "hidden",
-        "padding": "4px 8px",
-        "boxSizing": "border-box",
-        "display": "flex",
-        "flexDirection": "column"
+        "minHeight": "100vh",
+        "overflowX": "hidden",
+        "overflowY": "auto",
+        "padding": "8px 12px",
+        "boxSizing": "border-box"
     },
     children=[
         dcc.Interval(id="quant-interval", interval=1000, n_intervals=0),
@@ -1046,9 +1045,9 @@ app.layout = html.Div(
         # 1. TOP HEADER (Exact Image Match)
         html.Div(
             style={
-                "display": "flex", "justifyContent": "space-between", "alignItems": "center",
+                "display": "flex", "flexWrap": "wrap", "gap": "8px", "justifyContent": "space-between", "alignItems": "center",
                 "backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px",
-                "padding": "4px 12px", "marginBottom": "4px", "height": "34px", "flexShrink": 0
+                "padding": "6px 14px", "marginBottom": "6px"
             },
             children=[
                 # Left Title
@@ -1071,10 +1070,10 @@ app.layout = html.Div(
 
         # 2. TWO UPPER AI BANNERS (Row 2 - Exact Image Match)
         html.Div(
-            style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "6px", "marginBottom": "4px", "flexShrink": 0},
+            style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(280px, 1fr))", "gap": "6px", "marginBottom": "6px"},
             children=[
-                html.Div(id="ai-regime-card", style={"backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px", "padding": "4px 10px", "fontSize": "11px", "fontWeight": "bold"}),
-                html.Div(id="vwap-sniper-card", style={"backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px", "padding": "4px 10px", "fontSize": "11px", "fontWeight": "bold"})
+                html.Div(id="ai-regime-card", style={"backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px", "padding": "6px 12px", "fontSize": "11px", "fontWeight": "bold"}),
+                html.Div(id="vwap-sniper-card", style={"backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px", "padding": "6px 12px", "fontSize": "11px", "fontWeight": "bold"})
             ]
         ),
 
@@ -1083,18 +1082,18 @@ app.layout = html.Div(
             id="metrics-strip-row",
             style={
                 "backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px",
-                "padding": "3px 12px", "marginBottom": "4px", "display": "flex", "justifyContent": "space-between",
-                "alignItems": "center", "fontSize": "11px", "height": "26px", "flexShrink": 0
+                "padding": "6px 12px", "marginBottom": "6px", "display": "flex", "flexWrap": "wrap", "gap": "8px", "justifyContent": "space-between",
+                "alignItems": "center", "fontSize": "11px"
             }
         ),
 
-        # 4. MAIN BODY (Row 4: Chart Left 78% + Right Column 22%)
+        # 4. MAIN BODY (Row 4: Chart Left + Right Column)
         html.Div(
-            style={"display": "grid", "gridTemplateColumns": "3.8fr 1.2fr", "gap": "6px", "flexGrow": 1, "minHeight": 0, "marginBottom": "4px"},
+            style={"display": "flex", "flexWrap": "wrap", "gap": "8px", "marginBottom": "6px"},
             children=[
                 # Center Chart Panel
                 html.Div(
-                    style={"backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px", "padding": "4px 6px", "display": "flex", "flexDirection": "column"},
+                    style={"flex": "1 1 680px", "minWidth": "320px", "backgroundColor": "#0A0E17", "border": "1px solid #162032", "borderRadius": "4px", "padding": "6px 8px", "display": "flex", "flexDirection": "column"},
                     children=[
                         html.Div(
                             "EXACT SIGNATURE 3-TIER MULTI-PANE CHART LAYOUT FROM PORT 8080)",
@@ -1103,17 +1102,23 @@ app.layout = html.Div(
                         html.Div(
                             dcc.Graph(
                                 id="quant-main-chart",
-                                config={"displayModeBar": False, "responsive": True},
-                                style={"width": "100%", "height": "100%"}
+                                config={
+                                    "scrollZoom": True,
+                                    "displayModeBar": True,
+                                    "displaylogo": False,
+                                    "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                                    "responsive": True
+                                },
+                                style={"width": "100%", "height": "560px", "minHeight": "420px", "touchAction": "pan-y"}
                             ),
-                            style={"flexGrow": 1, "minHeight": 0}
+                            style={"flexGrow": 1, "minHeight": "420px"}
                         )
                     ]
                 ),
 
                 # Right Column (4 Cards matching the image)
                 html.Div(
-                    style={"display": "flex", "flexDirection": "column", "gap": "4px", "height": "100%"},
+                    style={"flex": "1 1 300px", "minWidth": "260px", "display": "flex", "flexDirection": "column", "gap": "6px"},
                     children=[
                         # 1. DOM Depth Ladder
                         html.Div(
@@ -1409,10 +1414,10 @@ def update_quant_terminal_ui(n):
             showarrow=False, font=dict(size=9, color="#38BDF8", weight="bold"), align="left"
         )
 
-        fig.update_xaxes(type='category', showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"))
-        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=1, col=1)
-        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=2, col=1)
-        fig.update_yaxes(autorange=True, showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=3, col=1)
+        fig.update_xaxes(type='category', showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), fixedrange=False)
+        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=1, col=1, fixedrange=False)
+        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=2, col=1, fixedrange=False)
+        fig.update_yaxes(autorange=True, showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=3, col=1, fixedrange=False)
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor="#0A0E17",
@@ -1420,6 +1425,8 @@ def update_quant_terminal_ui(n):
             margin=dict(l=6, r=60, t=10, b=10),
             xaxis_rangeslider_visible=False,
             showlegend=False,
+            dragmode="pan",
+            uirevision="constant_zoom_state",
             autosize=True
         )
     else:

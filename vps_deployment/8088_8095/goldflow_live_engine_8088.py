@@ -1307,15 +1307,20 @@ t_engine.start()
 # =============================================================================
 # DASH WEB USER INTERFACE (PORT 8088)
 # =============================================================================
-app = dash.Dash(__name__, title='GOLDFLOW Dual-Model Live Engine', update_title=None)
+app = dash.Dash(
+    __name__,
+    title='GOLDFLOW Dual-Model Live Engine',
+    update_title=None,
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
+)
 
 app.layout = html.Div(
-    style={'backgroundColor':'#030712','color':'#E6EDF3','fontFamily':"'JetBrains Mono','Consolas',monospace",'minHeight':'100vh','padding':'10px 16px'},
+    style={'backgroundColor':'#030712','color':'#E6EDF3','fontFamily':"'JetBrains Mono','Consolas',monospace",'minHeight':'100vh','padding':'10px 16px','overflowX':'hidden','overflowY':'auto'},
     children=[
         dcc.Interval(id='live-refresh', interval=1500, n_intervals=0),
 
         # TOP HEADER
-        html.Div(style={'display':'flex','alignItems':'center','justifyContent':'space-between','backgroundColor':'#0A0E17','border':'1px solid #1E293B','borderBottom':'2px solid #00E676','padding':'8px 16px','borderRadius':'6px','marginBottom':'10px'},
+        html.Div(style={'display':'flex','flexWrap':'wrap','gap':'10px','alignItems':'center','justifyContent':'space-between','backgroundColor':'#0A0E17','border':'1px solid #1E293B','borderBottom':'2px solid #00E676','padding':'8px 16px','borderRadius':'6px','marginBottom':'10px'},
             children=[
                 html.Div([
                     html.Span('⚡ GOLD.FLOW', style={'color':'#FFD700','fontWeight':'900','fontSize':'18px'}),
@@ -1327,7 +1332,7 @@ app.layout = html.Div(
             ]),
 
         # 4-COLUMN TOP COMPARISON CARDS
-        html.Div(style={'display':'grid','gridTemplateColumns':'1.2fr 1.2fr 1fr 1fr','gap':'10px','marginBottom':'10px'},
+        html.Div(style={'display':'grid','gridTemplateColumns':'repeat(auto-fit, minmax(220px, 1fr))','gap':'10px','marginBottom':'10px'},
             children=[
                 # MODEL A CARD (Full 8086 Confluence)
                 html.Div(id='model-a-card', style={'backgroundColor':'#0A0E17','border':'1px solid #3B82F6','borderRadius':'6px','padding':'10px'}),
@@ -1340,9 +1345,9 @@ app.layout = html.Div(
             ]),
 
         # MASTER CONTROLS BAR
-        html.Div(style={'backgroundColor':'#0A0E17','border':'1px solid #1E293B','borderRadius':'6px','padding':'10px 14px','marginBottom':'10px','display':'flex','alignItems':'center','justifyContent':'space-between'},
+        html.Div(style={'backgroundColor':'#0A0E17','border':'1px solid #1E293B','borderRadius':'6px','padding':'10px 14px','marginBottom':'10px','display':'flex','flexWrap':'wrap','gap':'10px','alignItems':'center','justifyContent':'space-between'},
             children=[
-                html.Div(style={'display':'flex','alignItems':'center','gap':'15px'},
+                html.Div(style={'display':'flex','flexWrap':'wrap','alignItems':'center','gap':'15px'},
                     children=[
                         html.Div([
                             html.Span('AUTO-PILOT:', style={'color':'#64748B','fontSize':'11px','fontWeight':'bold','marginRight':'6px'}),
@@ -1371,7 +1376,7 @@ app.layout = html.Div(
             ]),
 
         # 2-COLUMN MAIN CONTENT (BLOTTER & AUDIT)
-        html.Div(style={'display':'grid','gridTemplateColumns':'1.6fr 1fr','gap':'10px'},
+        html.Div(style={'display':'grid','gridTemplateColumns':'repeat(auto-fit, minmax(320px, 1fr))','gap':'10px'},
             children=[
                 # LEFT COLUMN: ACTIVE BLOTTER & SMC LEVELS
                 html.Div([

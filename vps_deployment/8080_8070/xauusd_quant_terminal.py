@@ -900,7 +900,8 @@ app = dash.Dash(
     __name__,
     title="GOLD.FLOW // AI Quant Terminal (XAUUSD)",
     update_title=None,
-    suppress_callback_exceptions=True
+    suppress_callback_exceptions=True,
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
 
 app.layout = html.Div(
@@ -911,7 +912,9 @@ app.layout = html.Div(
         "fontFamily": "'JetBrains Mono', 'Consolas', 'Courier New', monospace",
         "minHeight": "100vh",
         "padding": "8px 14px",
-        "boxSizing": "border-box"
+        "boxSizing": "border-box",
+        "overflowX": "hidden",
+        "overflowY": "auto"
     },
     children=[
         dcc.Interval(id="quant-interval", interval=1000, n_intervals=0),
@@ -921,6 +924,8 @@ app.layout = html.Div(
             id="quant-topbar",
             style={
                 "display": "flex",
+                "flexWrap": "wrap",
+                "gap": "10px",
                 "justifyContent": "space-between",
                 "alignItems": "center",
                 "backgroundColor": "#0A0E17",
@@ -955,7 +960,7 @@ app.layout = html.Div(
             id="ai-regime-hud",
             style={
                 "display": "grid",
-                "gridTemplateColumns": "1.2fr 2.8fr",
+                "gridTemplateColumns": "repeat(auto-fit, minmax(280px, 1fr))",
                 "gap": "10px",
                 "marginBottom": "10px"
             },
@@ -994,7 +999,7 @@ app.layout = html.Div(
             id="ticker-strip",
             style={
                 "display": "grid",
-                "gridTemplateColumns": "1.5fr 1fr 1fr 1fr 1fr 1fr",
+                "gridTemplateColumns": "repeat(auto-fit, minmax(140px, 1fr))",
                 "gap": "8px",
                 "marginBottom": "10px"
             },
@@ -1010,19 +1015,25 @@ app.layout = html.Div(
 
         # MAIN WORKSPACE: 72% Chart & CVD | 28% DOM Ladder & Time/Sales
         html.Div(
-            style={"display": "flex", "gap": "10px", "marginBottom": "10px"},
+            style={"display": "flex", "flexWrap": "wrap", "gap": "10px", "marginBottom": "10px"},
             children=[
                 # Left Panel: Main Chart & Subplots
                 html.Div(
-                    style={"flex": "7.2", "display": "flex", "flexDirection": "column", "gap": "8px"},
+                    style={"flex": "1 1 680px", "minWidth": "320px", "display": "flex", "flexDirection": "column", "gap": "8px"},
                     children=[
                         html.Div(
                             style={"backgroundColor": "#0A0E17", "border": "1px solid #1E293B", "borderRadius": "6px", "padding": "6px"},
                             children=[
                                 dcc.Graph(
                                     id="quant-main-chart",
-                                    config={"displayModeBar": False, "responsive": True},
-                                    style={"height": "560px"}
+                                    config={
+                                        "scrollZoom": True,
+                                        "displayModeBar": True,
+                                        "displaylogo": False,
+                                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                                        "responsive": True
+                                    },
+                                    style={"height": "560px", "minHeight": "420px", "touchAction": "pan-y"}
                                 )
                             ]
                         )
@@ -1031,7 +1042,7 @@ app.layout = html.Div(
 
                 # Right Panel: DOM Ladder + The Tape
                 html.Div(
-                    style={"flex": "2.8", "display": "flex", "flexDirection": "column", "gap": "8px"},
+                    style={"flex": "1 1 320px", "minWidth": "280px", "display": "flex", "flexDirection": "column", "gap": "8px"},
                     children=[
                         # DOM Ladder
                         html.Div(
@@ -1412,8 +1423,8 @@ def update_quant_terminal(n):
             annotation_font=dict(color="#FFD700", size=11, family="monospace")
         )
 
-        fig.update_xaxes(type='category', showgrid=True, gridcolor="#131C2E", tickfont=dict(size=9, color="#94A3B8"))
-        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=10, color="#94A3B8"))
+        fig.update_xaxes(type='category', showgrid=True, gridcolor="#131C2E", tickfont=dict(size=9, color="#94A3B8"), fixedrange=False)
+        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=10, color="#94A3B8"), fixedrange=False)
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor="#0A0E17",
@@ -1422,6 +1433,8 @@ def update_quant_terminal(n):
             xaxis_rangeslider_visible=False,
             height=550,
             showlegend=True,
+            dragmode="pan",
+            uirevision="constant_zoom_state",
             legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10, color="#94A3B8"))
         )
     else:

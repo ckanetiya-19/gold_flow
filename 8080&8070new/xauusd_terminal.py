@@ -869,7 +869,8 @@ app = dash.Dash(
     __name__,
     title="GOLD.FLOW // Institutional Master Bloomberg Terminal (XAUUSD)",
     update_title=None,
-    suppress_callback_exceptions=True
+    suppress_callback_exceptions=True,
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
 
 app.layout = html.Div(
@@ -880,7 +881,9 @@ app.layout = html.Div(
         "fontFamily": "'JetBrains Mono', 'Consolas', 'Courier New', monospace",
         "minHeight": "100vh",
         "padding": "8px 12px",
-        "boxSizing": "border-box"
+        "boxSizing": "border-box",
+        "overflowX": "hidden",
+        "overflowY": "auto"
     },
     children=[
         dcc.Interval(id="terminal-interval", interval=1000, n_intervals=0),
@@ -890,12 +893,14 @@ app.layout = html.Div(
             id="terminal-topbar",
             style={
                 "display": "flex",
+                "flexWrap": "wrap",
+                "gap": "10px",
                 "justifyContent": "space-between",
                 "alignItems": "center",
                 "backgroundColor": "#0D1117",
                 "border": "1px solid #21262D",
                 "borderBottom": "2px solid #00F0FF",
-                "padding": "6px 14px",
+                "padding": "8px 14px",
                 "borderRadius": "4px",
                 "marginBottom": "8px"
             },
@@ -925,7 +930,7 @@ app.layout = html.Div(
             id="ticker-strip",
             style={
                 "display": "grid",
-                "gridTemplateColumns": "1.4fr 1fr 1fr 1fr 1.3fr 1fr",
+                "gridTemplateColumns": "repeat(auto-fit, minmax(140px, 1fr))",
                 "gap": "8px",
                 "marginBottom": "8px"
             },
@@ -941,19 +946,26 @@ app.layout = html.Div(
 
         # MAIN WORKSPACE: 70% Charts & CVD | 30% DOM Ladder & Time/Sales
         html.Div(
-            style={"display": "flex", "gap": "8px", "marginBottom": "8px"},
+            id="main-workspace-grid",
+            style={"display": "flex", "flexWrap": "wrap", "gap": "10px", "marginBottom": "8px"},
             children=[
                 # Left Panel: Main Chart & CVD
                 html.Div(
-                    style={"flex": "7", "display": "flex", "flexDirection": "column", "gap": "8px"},
+                    style={"flex": "1 1 680px", "minWidth": "320px", "display": "flex", "flexDirection": "column", "gap": "8px"},
                     children=[
                         html.Div(
                             style={"backgroundColor": "#0D1117", "border": "1px solid #21262D", "borderRadius": "4px", "padding": "4px"},
                             children=[
                                 dcc.Graph(
                                     id="main-terminal-chart",
-                                    config={"displayModeBar": False, "responsive": True},
-                                    style={"height": "560px"}
+                                    config={
+                                        "scrollZoom": True,
+                                        "displayModeBar": True,
+                                        "displaylogo": False,
+                                        "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                                        "responsive": True
+                                    },
+                                    style={"height": "560px", "minHeight": "420px", "touchAction": "pan-y"}
                                 )
                             ]
                         )
@@ -962,7 +974,7 @@ app.layout = html.Div(
 
                 # Right Panel: DOM Ladder + The Tape (Time & Sales)
                 html.Div(
-                    style={"flex": "3", "display": "flex", "flexDirection": "column", "gap": "8px"},
+                    style={"flex": "1 1 320px", "minWidth": "280px", "display": "flex", "flexDirection": "column", "gap": "8px"},
                     children=[
                         # DOM / Depth Ladder
                         html.Div(
@@ -1232,10 +1244,12 @@ def update_terminal_ui(n):
         plot_bgcolor="#0A0D14",
         margin=dict(l=10, r=40, t=10, b=10),
         showlegend=False,
-        xaxis=dict(type='category', showgrid=True, gridcolor="#161B22", rangeslider=dict(visible=False), nticks=15),
-        yaxis=dict(showgrid=True, gridcolor="#161B22", side="right"),
-        xaxis2=dict(type='category', showgrid=True, gridcolor="#161B22", nticks=15),
-        yaxis2=dict(showgrid=True, gridcolor="#161B22", side="right")
+        dragmode="pan",
+        uirevision="constant_zoom_state",
+        xaxis=dict(type='category', showgrid=True, gridcolor="#161B22", rangeslider=dict(visible=False), nticks=15, fixedrange=False),
+        yaxis=dict(showgrid=True, gridcolor="#161B22", side="right", fixedrange=False),
+        xaxis2=dict(type='category', showgrid=True, gridcolor="#161B22", nticks=15, fixedrange=False),
+        yaxis2=dict(showgrid=True, gridcolor="#161B22", side="right", fixedrange=False)
     )
 
     # 4. DOM Ladder Rendering
