@@ -44,7 +44,6 @@ import pandas as pd
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
-from flask import request, Response
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -1034,18 +1033,6 @@ app = dash.Dash(
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
 
-server = app.server
-
-@server.before_request
-def require_basic_auth():
-    auth = request.authorization
-    if not auth or auth.username != 'am' or auth.password != 'Orferflow@1910':
-        return Response(
-            '401 Unauthorized - Access Denied\nGoldFlow Quant Stream Terminal 8095',
-            401,
-            {'WWW-Authenticate': 'Basic realm="GoldFlow Secured Terminal"'}
-        )
-
 app.layout = html.Div(
     id="master-quant-container",
     style={
@@ -1323,16 +1310,20 @@ def update_quant_terminal_ui(n):
         now_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
         df = df[df['dt'] <= now_cutoff].reset_index(drop=True)
 
-        # Dynamic VWAP & Bands
+        # Dynamic Daily Session-Anchored VWAP & Tight Institutional Bands ($3.60 Total Gap)
+        df['date'] = df['dt'].dt.date
         typical_price = (df['high'] + df['low'] + df['close']) / 3.0
-        cum_pv_series = (typical_price * df['volume']).cumsum()
-        cum_vol_series = df['volume'].cumsum()
-        df['vwap'] = np.where(cum_vol_series > 0, (cum_pv_series / cum_vol_series).round(2), df['close'])
+        df['typical'] = typical_price
+        df['cum_pv'] = df.groupby('date').apply(lambda g: (g['typical'] * g['volume']).cumsum()).reset_index(level=0, drop=True)
+        df['cum_vol'] = df.groupby('date')['volume'].cumsum()
+        df['vwap'] = np.where(df['cum_vol'] > 0, (df['cum_pv'] / df['cum_vol']).round(2), df['close'])
 
-        df['diff_sq'] = ((typical_price - df['vwap']) ** 2) * df['volume']
-        df['vwap_std'] = np.sqrt(df['diff_sq'].cumsum() / np.maximum(cum_vol_series, 1.0))
-        df['vwap_upper'] = (df['vwap'] + 1.28 * df['vwap_std']).round(2)
-        df['vwap_lower'] = (df['vwap'] - 1.28 * df['vwap_std']).round(2)
+        # Exact $1.80 Upper / Lower Band ($3.60 Total Gap, perfectly hugging candles)
+        df['vwap_upper'] = (df['vwap'] + 1.80).round(2)
+        df['vwap_lower'] = (df['vwap'] - 1.80).round(2)
+
+        # Focused active display window (Last 80 candles) - Wide, clear, never squished
+        chart_df = df.tail(80).reset_index(drop=True)
 
         fig = make_subplots(
             rows=3, cols=1,
@@ -1341,10 +1332,10 @@ def update_quant_terminal_ui(n):
             row_heights=[0.68, 0.16, 0.16]
         )
 
-        # Pane 1: Candlestick
+        # Pane 1: Candlestick (Wide, clear, comfortable bar spacing)
         fig.add_trace(
             go.Candlestick(
-                x=df['dt'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                x=chart_df['dt'], open=chart_df['open'], high=chart_df['high'], low=chart_df['low'], close=chart_df['close'],
                 name="XAUUSD",
                 increasing_line_color="#00E676", decreasing_line_color="#FF3366",
                 increasing_fillcolor="rgba(0,230,118,0.25)", decreasing_fillcolor="rgba(255,51,102,0.25)",
@@ -1354,24 +1345,24 @@ def update_quant_terminal_ui(n):
 
         # Pane 1: Solid Yellow VWAP
         fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['vwap'], mode="lines", name="VWAP", line=dict(color="#FFD700", width=2.5)),
+            go.Scatter(x=chart_df['dt'], y=chart_df['vwap'], mode="lines", name="VWAP", line=dict(color="#FFD700", width=2.5)),
             row=1, col=1
         )
 
-        # Pane 1: Upper Band (+1.28σ Orange Dotted)
+        # Pane 1: Upper Band (+1.80$ Orange Dotted)
         fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['vwap_upper'], mode="lines", name="+1.28σ Band", line=dict(color="#FF9800", width=1.5, dash="dot")),
+            go.Scatter(x=chart_df['dt'], y=chart_df['vwap_upper'], mode="lines", name="+1.80 Band", line=dict(color="#FF9800", width=1.5, dash="dot")),
             row=1, col=1
         )
 
-        # Pane 1: Lower Band (-1.28σ Cyan Dashed)
+        # Pane 1: Lower Band (-1.80$ Cyan Dashed)
         fig.add_trace(
-            go.Scatter(x=df['dt'], y=df['vwap_lower'], mode="lines", name="-1.28σ Band", line=dict(color="#00F0FF", width=1.5, dash="dash")),
+            go.Scatter(x=chart_df['dt'], y=chart_df['vwap_lower'], mode="lines", name="-1.80 Band", line=dict(color="#00F0FF", width=1.5, dash="dash")),
             row=1, col=1
         )
 
         # Pane 1: Imbalance Stars (⭐)
-        imb_df = df[df['imbalance'] == True]
+        imb_df = chart_df[chart_df['imbalance'] == True]
         if not imb_df.empty:
             fig.add_trace(
                 go.Scatter(
@@ -1398,11 +1389,11 @@ def update_quant_terminal_ui(n):
                           annotation_font_color="#FFFFFF", annotation_bgcolor="#FF3366", annotation_font_size=9)
 
         # Pane 2: Volume Delta Bars + Visible Delta Numbers
-        delta_colors = ["#00E676" if d >= 0 else "#FF3366" for d in df['delta']]
-        delta_texts = [f"{d:+.0f}" if abs(d) >= 0.5 else "" for d in df['delta']]
+        delta_colors = ["#00E676" if d >= 0 else "#FF3366" for d in chart_df['delta']]
+        delta_texts = [f"{d:+.0f}" if abs(d) >= 0.5 else "" for d in chart_df['delta']]
         fig.add_trace(
             go.Bar(
-                x=df['dt'], y=df['delta'], name="Delta",
+                x=chart_df['dt'], y=chart_df['delta'], name="Delta",
                 marker_color=delta_colors,
                 text=delta_texts,
                 textposition="outside",
@@ -1417,10 +1408,10 @@ def update_quant_terminal_ui(n):
         )
 
         # Pane 3: CVD (#38BDF8) Area Curve (Window-relative auto-scaled for dynamic live wave)
-        window_cvd = (df['delta'].cumsum()).round(1)
+        window_cvd = (chart_df['delta'].cumsum()).round(1)
         fig.add_trace(
             go.Scatter(
-                x=df['dt'], y=window_cvd, mode="lines", name="CVD",
+                x=chart_df['dt'], y=window_cvd, mode="lines", name="CVD",
                 line=dict(color="#38BDF8", width=2.2),
                 fill="tozeroy", fillcolor="rgba(56,189,248,0.22)", showlegend=False
             ), row=3, col=1
@@ -1431,11 +1422,9 @@ def update_quant_terminal_ui(n):
             showarrow=False, font=dict(size=9, color="#38BDF8", weight="bold"), align="left"
         )
 
-        last_dt = df['dt'].iloc[-1]
-        start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
-        if start_dt >= last_dt:
-            start_dt = last_dt - pd.Timedelta(hours=1)
-        end_dt = last_dt + pd.Timedelta(minutes=5)
+        last_dt = chart_df['dt'].iloc[-1]
+        start_dt = chart_df['dt'].iloc[0]
+        end_dt = last_dt + pd.Timedelta(minutes=3)
 
         fig.update_xaxes(
             type="date",
