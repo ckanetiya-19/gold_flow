@@ -63,10 +63,10 @@ bash deploy_vps_master.sh
 | **8086** | **Confluence Backtester** | `http://YOUR_VPS_IP:8086` | Historical Strategy Simulator |
 
 🔐 **લૉગિન વિગતો (Default Login Credentials):**
-- **Username:** `admin`
-- **Password:** `goldflow123`
+- **Username:** `am`
+- **Password:** `Orferflow@1910`
 
-*(પાસવર્ડ બદલવા માટે VPS માં આ કમાન્ડ લખો: `sudo htpasswd -b /etc/nginx/.goldflow_htpasswd admin નવો_પાસવર્ડ`)*
+*(પાસવર્ડ બદલવા માટે VPS માં આ કમાન્ડ લખો: `sudo htpasswd -b /etc/nginx/.goldflow_htpasswd am નવો_પાસવર્ડ`)*
 
 ---
 

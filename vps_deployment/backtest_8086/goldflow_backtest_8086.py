@@ -16,6 +16,7 @@
 
 import dash
 from dash import dcc, html, Input, Output, State
+from flask import request, Response
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -644,6 +645,18 @@ def run_backtest(df_raw, settings):
 # DASH WEB DASHBOARD
 # =============================================================================
 app = dash.Dash(__name__, title='GOLDFLOW Pure Spot Backtest Engine', update_title=None, suppress_callback_exceptions=True)
+
+server = app.server
+
+@server.before_request
+def require_basic_auth():
+    auth = request.authorization
+    if not auth or auth.username != 'am' or auth.password != 'Orferflow@1910':
+        return Response(
+            '401 Unauthorized - Access Denied\nGoldFlow Backtest Lab 8086',
+            401,
+            {'WWW-Authenticate': 'Basic realm="GoldFlow Secured Terminal"'}
+        )
 
 today = datetime.now()
 d_30_ago = today - timedelta(days=30)

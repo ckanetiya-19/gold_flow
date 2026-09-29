@@ -76,14 +76,10 @@ done
 
 echo -e "${YELLOW}[6/7] Configuring Nginx Reverse Proxy with Basic Authentication...${NC}"
 HTPASSWD_FILE="/etc/nginx/.goldflow_htpasswd"
-if [ ! -f "${HTPASSWD_FILE}" ]; then
-    DEFAULT_PASS="goldflow123"
-    htpasswd -bc "${HTPASSWD_FILE}" admin "${DEFAULT_PASS}"
-    echo -e "${GREEN}? Created default credentials: Username: admin | Password: ${DEFAULT_PASS}${NC}"
-    echo -e "${CYAN}  (You can change password later using: sudo htpasswd -b /etc/nginx/.goldflow_htpasswd admin <NewPassword>)${NC}"
-else
-    echo -e "${GREEN}? Existing htpasswd credentials preserved.${NC}"
-fi
+DEFAULT_USER="am"
+DEFAULT_PASS="Orferflow@1910"
+htpasswd -bc "${HTPASSWD_FILE}" "${DEFAULT_USER}" "${DEFAULT_PASS}"
+echo -e "${GREEN}✓ Set credentials: Username: ${DEFAULT_USER} | Password: ${DEFAULT_PASS}${NC}"
 
 cp "${SCRIPT_DIR}/nginx/goldflow_vps.conf" /etc/nginx/sites-available/goldflow.conf
 rm -f /etc/nginx/sites-enabled/default

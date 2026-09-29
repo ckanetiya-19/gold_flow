@@ -44,6 +44,7 @@ import pandas as pd
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
+from flask import request, Response
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -1032,6 +1033,18 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
+
+server = app.server
+
+@server.before_request
+def require_basic_auth():
+    auth = request.authorization
+    if not auth or auth.username != 'am' or auth.password != 'Orferflow@1910':
+        return Response(
+            '401 Unauthorized - Access Denied\nGoldFlow Quant Stream Terminal 8095',
+            401,
+            {'WWW-Authenticate': 'Basic realm="GoldFlow Secured Terminal"'}
+        )
 
 app.layout = html.Div(
     id="master-quant-container",

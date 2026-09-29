@@ -2260,7 +2260,32 @@ window.onload = () => {
 """
 
 class SatelliteRadarHandler(BaseHTTPRequestHandler):
+    def check_auth(self):
+        auth_header = self.headers.get('Authorization')
+        if not auth_header:
+            return False
+        try:
+            import base64
+            auth_type, encoded = auth_header.split(' ', 1)
+            if auth_type.lower() != 'basic':
+                return False
+            decoded = base64.b64decode(encoded).decode('utf-8')
+            u, p = decoded.split(':', 1)
+            return u == 'am' and p == 'Orferflow@1910'
+        except Exception:
+            return False
+
+    def send_auth_challenge(self):
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="GoldFlow Radar 8090"')
+        self.send_header('Content-Type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"401 Unauthorized - Access Denied\nGoldFlow Radar Terminal")
+
     def do_GET(self):
+        if not self.check_auth():
+            self.send_auth_challenge()
+            return
         if self.path == "/" or self.path.startswith("/?"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2292,6 +2317,9 @@ class SatelliteRadarHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Not Found")
 
     def do_POST(self):
+        if not self.check_auth():
+            self.send_auth_challenge()
+            return
         if self.path == "/api/jarvis/converse":
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode('utf-8')

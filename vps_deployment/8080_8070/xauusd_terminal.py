@@ -8,7 +8,7 @@
 
 import dash
 from dash import dcc, html, Input, Output
-from flask import request, jsonify, render_template_string
+from flask import request, jsonify, render_template_string, Response
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -1729,6 +1729,16 @@ TV_CHART_HTML = """<!DOCTYPE html>
 """
 
 server = app.server
+
+@server.before_request
+def require_basic_auth():
+    auth = request.authorization
+    if not auth or auth.username != 'am' or auth.password != 'Orferflow@1910':
+        return Response(
+            '401 Unauthorized - Access Denied\nGoldFlow Institutional Terminal',
+            401,
+            {'WWW-Authenticate': 'Basic realm="GoldFlow Secured Terminal"'}
+        )
 
 @server.route('/chart')
 def serve_tv_chart():

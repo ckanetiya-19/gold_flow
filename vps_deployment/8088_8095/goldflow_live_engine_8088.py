@@ -29,6 +29,7 @@
 
 import dash
 from dash import dcc, html, Input, Output, State, callback_context
+from flask import request, Response
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
@@ -1315,6 +1316,18 @@ app = dash.Dash(
     update_title=None,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
+
+server = app.server
+
+@server.before_request
+def require_basic_auth():
+    auth = request.authorization
+    if not auth or auth.username != 'am' or auth.password != 'Orferflow@1910':
+        return Response(
+            '401 Unauthorized - Access Denied\nGoldFlow Live Engine 8088',
+            401,
+            {'WWW-Authenticate': 'Basic realm="GoldFlow Secured Terminal"'}
+        )
 
 app.layout = html.Div(
     style={'backgroundColor':'#030712','color':'#E6EDF3','fontFamily':"'JetBrains Mono','Consolas',monospace",'minHeight':'100vh','padding':'10px 16px','overflowX':'hidden','overflowY':'auto'},
