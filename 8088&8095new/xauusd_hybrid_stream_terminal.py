@@ -217,7 +217,7 @@ trade_state = {
     "retest_cycle": 1
 }
 retest_state = {"side": None, "cycle": 1}
-LIVE_MT5_EXECUTION = True  # ENABLED: Live MT5 execution active on Demo Account 1189847
+LIVE_MT5_EXECUTION = False  # STRICT PAPER TRADING ONLY - Zero live MT5 execution
 
 recent_tape = deque(maxlen=40)
 order_book = {"bids": [], "asks": []}

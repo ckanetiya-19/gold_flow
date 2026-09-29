@@ -29,6 +29,7 @@
 
 import dash
 from dash import dcc, html, Input, Output, State, callback_context
+from flask import request, Response
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
@@ -1201,11 +1202,20 @@ def execute_order(direction, magic_num, comment_tag, reason_str, candle_time=0):
                 logger.info(f"execute_order aborted: 5M candle {curr_candle} already locked.")
                 return
             # Pre-lock current 5M candle immediately
-            engine_state['last_traded_candle_time'] = curr_candle
-
-        if mt5 is None:
-            log_audit(f'ORDER SIMULATED (Linux VPS Standby): [{comment_tag}] 0.01 {direction}', 'SIMULATED')
+        # HARDWARE KILL-SWITCH: STRICT PAPER TRADING ONLY
+        PAPER_TRADING_ONLY = True
+        if PAPER_TRADING_ONLY or mt5 is None:
+            price = latest_tick.get('bid', 2650.0) if direction == 'SELL' else latest_tick.get('ask', 2650.0)
+            sl = round(price - 2.50, 2) if direction == 'BUY' else round(price + 2.50, 2)
+            tp = round(price + 5.00, 2) if direction == 'BUY' else round(price - 5.00, 2)
+            rem_str = get_5m_countdown_str()
+            log_audit(f'📄 [PAPER SIMULATION] 0.01 {direction} [{comment_tag}] at ${price:.2f} | SL=${sl:.2f}, TP=${tp:.2f} | {reason_str}', 'SIMULATED')
+            with state_lock:
+                engine_state['last_traded_candle_time'] = curr_candle
+                engine_state['last_trade_exec_time'] = time.time()
+                engine_state['candle_lock_status'] = f'LOCKED ({rem_str})'
             return
+
         with mt5_lock:
             if not mt5.initialize():
                 return
@@ -1315,6 +1325,18 @@ app = dash.Dash(
     update_title=None,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes"}]
 )
+
+server = app.server
+
+@server.before_request
+def require_basic_auth():
+    auth = request.authorization
+    if not auth or auth.username != 'am' or auth.password != 'Orferflow@1910':
+        return Response(
+            '401 Unauthorized - Access Denied\nGoldFlow Live Engine 8088',
+            401,
+            {'WWW-Authenticate': 'Basic realm="GoldFlow Secured Terminal"'}
+        )
 
 app.layout = html.Div(
     style={'backgroundColor':'#030712','color':'#E6EDF3','fontFamily':"'JetBrains Mono','Consolas',monospace",'minHeight':'100vh','padding':'10px 16px','overflowX':'hidden','overflowY':'auto'},

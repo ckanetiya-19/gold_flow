@@ -42,6 +42,10 @@ DEFAULT_SYMBOL = "XAUUSD.sd"
 DEFAULT_LOTS = 0.01
 MAX_SLIPPAGE_POINTS = 30  # 30 points = $0.30 slippage guard
 
+# HARDWARE KILL-SWITCH: STRICT PAPER TRADING ONLY
+# Zero real MT5 execution allowed across ALL ports
+PAPER_TRADING_ONLY = True
+
 
 def init_mt5():
     """Initialize connection to MetaTrader 5 and ensure gold symbol is selected."""
@@ -133,6 +137,21 @@ def send_order(direction, lots=DEFAULT_LOTS, sl_points=2.0, tp_points=4.0,
     # Log order submission with port identification
     logger.info(f"📤 [MT5_BRIDGE] Submitting {direction.upper()} order for Magic {magic} (Port {magic // 100}) | SL: {sl_price} | TP: {tp_price}")
 
+    if PAPER_TRADING_ONLY:
+        import random
+        fake_ticket = random.randint(90000000, 99999999)
+        exec_price = float(sl_price if sl_price is not None else 2650.0)
+        logger.info(f"📄 [PAPER TRADING SIMULATION] {direction.upper()} {lots} {symbol} (Magic {magic} - Port {magic // 100}) | SL: {sl_price} | TP: {tp_price} | Simulated Ticket #{fake_ticket}")
+        return {
+            "success": True,
+            "ticket": fake_ticket,
+            "order": fake_ticket,
+            "volume": float(lots),
+            "price": exec_price,
+            "comment": "PAPER_TRADING_ONLY",
+            "retcode": 10009
+        }
+
     if not init_mt5():
         return {"success": False, "error": "MT5 Not Connected"}
 
@@ -213,6 +232,10 @@ def send_order(direction, lots=DEFAULT_LOTS, sl_points=2.0, tp_points=4.0,
 
 def close_position_by_ticket(ticket):
     """Close an open position by its ticket number."""
+    if PAPER_TRADING_ONLY:
+        logger.info(f"📄 [PAPER TRADING SIMULATION] Position #{ticket} closed in paper mode")
+        return True
+
     if not init_mt5():
         return False
 
@@ -255,6 +278,10 @@ def close_position_by_ticket(ticket):
 
 def modify_position_sl_tp(ticket, new_sl, new_tp=None):
     """Modify SL (and optionally TP) for an open MT5 position (e.g. for trailing SL)."""
+    if PAPER_TRADING_ONLY:
+        logger.info(f"📄 [PAPER TRADING SIMULATION] SL/TP modified for #{ticket} -> SL: ${new_sl:.2f}")
+        return True
+
     if not init_mt5():
         return False
     with _mt5_lock:

@@ -30,7 +30,8 @@ import multi_api_key_pool
 import sys
 try:
     import mt5_bridge
-    _MT5_AVAILABLE = True
+    # STRICT PAPER TRADING ONLY - Zero live MT5 execution
+    _MT5_AVAILABLE = False
 except ImportError:
     _MT5_AVAILABLE = False
 

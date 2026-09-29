@@ -588,8 +588,8 @@ def open_terminal_trade(direction, entry, sl, tp, risk, cycle, bar):
 
     logger.info(f"🚀 [PORT 8070] VWAP BOUNCE {direction} (Cycle #{cycle}): Entry=${entry:.2f} | SL=${sl:.2f} | TP=${tp:.2f} | Risk=${risk:.2f}")
 
-    # Live MT5 Demo Execution ENABLED per user instruction
-    LIVE_MT5_EXECUTION = True
+    # STRICT PAPER TRADING ONLY - Zero live MT5 execution
+    LIVE_MT5_EXECUTION = False
     if LIVE_MT5_EXECUTION:
         try:
             mt5_res = mt5_bridge.send_order(

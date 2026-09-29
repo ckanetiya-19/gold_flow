@@ -85,7 +85,7 @@ CONFIG = {
     "SYMBOL": "XAUUSD",
     "LOT_SIZE": 0.01,
     "RISK_REWARD": 2.5,
-    "ALLTICK_TOKEN": "e4432003c7fb8ef16dce2c8fbcf1ae57-c-app",
+    "ALLTICK_TOKEN": "4925bd3c3d58234362b2481ad684a0a7-c-app",
     "ITICK_TOKEN": "7111eb89b6364381bad7d4a507b5573ac880fb5d6c0e47bda0cae76a453c1bb0",
     "TWELVEDATA_KEYS": [
         "7b4a5b6feaf2429180934a74c8d88905",
@@ -217,7 +217,7 @@ trade_state = {
     "retest_cycle": 1
 }
 retest_state = {"side": None, "cycle": 1}
-LIVE_MT5_EXECUTION = True  # ENABLED: Live MT5 execution active on Demo Account 1189847
+LIVE_MT5_EXECUTION = False  # STRICT PAPER TRADING ONLY - Zero live MT5 execution
 
 recent_tape = deque(maxlen=40)
 order_book = {"bids": [], "asks": []}
@@ -427,8 +427,8 @@ def process_tick(price, size, is_buy, source_label="WS"):
             # Real-time Trailing SL & Exit Check
             manage_active_trade(price)
 
-            now_dt = datetime.now()
-            current_minute = now_dt.replace(second=0, microsecond=0)
+            now_dt = datetime.now(timezone.utc)
+            current_minute = now_dt.replace(second=0, microsecond=0, tzinfo=None)
             lvl = round(price, 1)
 
             if current_bar["time"] is None or current_bar["time"] < current_minute:
@@ -436,7 +436,7 @@ def process_tick(price, size, is_buy, source_label="WS"):
                     final_b = finalize_bar(current_bar, vwap)
                     historical_bars.append(final_b)
                     save_bar_to_db(final_b)
-                    if len(historical_bars) > 300:
+                    if len(historical_bars) > 2000:
                         historical_bars.pop(0)
                     evaluate_quant_sniper(final_b)
 
@@ -944,10 +944,10 @@ def bootstrap_bars():
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        cur.execute("SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, bvc_prob, ofi, imbalance FROM price_bars ORDER BY bar_time DESC LIMIT 120")
+        cur.execute("SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, bvc_prob, ofi, imbalance FROM price_bars ORDER BY bar_time DESC LIMIT 1500")
         rows = cur.fetchall()
         conn.close()
-        if len(rows) >= 10:
+        if len(rows) >= 500:
             rows.reverse()
             with data_lock:
                 for r in rows:
@@ -960,29 +960,35 @@ def bootstrap_bars():
                     })
                 market_state["live_price"] = historical_bars[-1]["close"]
                 cum_metrics["cvd"] = historical_bars[-1]["cvd"]
+            logger.info(f"✅ 8095 Restored {len(historical_bars)} continuous bars from DB.")
             return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"DB load warning: {e}")
 
     try:
-        r = requests.get("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1m&limit=80", timeout=5)
+        r = requests.get("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1m&limit=1000", timeout=10)
         if r.status_code == 200:
             with data_lock:
+                historical_bars.clear()
                 for k in r.json():
-                    t = datetime.fromtimestamp(k[0] / 1000).replace(second=0, microsecond=0)
+                    t = datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
                     op, hi, lo, cl = float(k[1]), float(k[2]), float(k[3]), float(k[4])
                     vol = float(k[5])
                     d = float(k[9]) - (vol - float(k[9]))
                     cum_metrics["cvd"] += d
-                    historical_bars.append({
+                    bar = {
                         "time": t, "open": op, "high": hi, "low": lo, "close": cl,
                         "volume": vol, "delta": d, "cvd": cum_metrics["cvd"],
                         "vwap": round((op+hi+lo+cl)/4, 2), "poc": round((hi+lo)/2, 2),
                         "bvc_prob": 0.50, "ofi": 0.0, "imbalance": False, "phase": "Binance"
-                    })
+                    }
+                    historical_bars.append(bar)
+                    save_bar_to_db(bar)
                 market_state["live_price"] = historical_bars[-1]["close"]
-    except Exception:
-        pass
+            logger.info(f"✅ 8095 Bootstrapped {len(historical_bars)} continuous bars from Binance.")
+            return
+    except Exception as e:
+        logger.error(f"Binance fetch error: {e}")
 
     if len(historical_bars) < 60:
         with data_lock:
@@ -990,7 +996,7 @@ def bootstrap_bars():
             cum_metrics["cvd"] = 50.0
             base_p = 4348.0
             now_dt = datetime.now().replace(second=0, microsecond=0)
-            for i in range(80, 0, -1):
+            for i in range(120, 0, -1):
                 t = now_dt - timedelta(minutes=i)
                 wave = math.sin(i / 7.0) * 4.2 + math.cos(i / 13.0) * 2.8
                 cl = round(base_p + wave, 2)
@@ -1297,14 +1303,12 @@ def update_quant_terminal_ui(n):
     ]
 
     # 6. SIGNATURE PORT 8080 3-TIER MULTI-PANE PLOTLY FIGURE (Exact Image Match)
-    if len(bars) > 80:
-        display_bars = bars[-80:]
-    else:
-        display_bars = bars
-
-    if display_bars:
-        df = pd.DataFrame(display_bars)
-        df['time_str'] = df['time'].apply(lambda x: x.strftime('%H:%M') if isinstance(x, datetime) else str(x)[-8:-3])
+    if bars:
+        df = pd.DataFrame(bars)
+        df['dt'] = pd.to_datetime(df['time'])
+        df = df.sort_values('dt').drop_duplicates(subset=['dt']).reset_index(drop=True)
+        now_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
+        df = df[df['dt'] <= now_cutoff].reset_index(drop=True)
 
         # Dynamic VWAP & Bands
         typical_price = (df['high'] + df['low'] + df['close']) / 3.0
@@ -1327,7 +1331,7 @@ def update_quant_terminal_ui(n):
         # Pane 1: Candlestick
         fig.add_trace(
             go.Candlestick(
-                x=df['time_str'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+                x=df['dt'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
                 name="XAUUSD",
                 increasing_line_color="#00E676", decreasing_line_color="#FF3366",
                 increasing_fillcolor="rgba(0,230,118,0.25)", decreasing_fillcolor="rgba(255,51,102,0.25)",
@@ -1337,19 +1341,19 @@ def update_quant_terminal_ui(n):
 
         # Pane 1: Solid Yellow VWAP
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap'], mode="lines", name="VWAP", line=dict(color="#FFD700", width=2.5)),
+            go.Scatter(x=df['dt'], y=df['vwap'], mode="lines", name="VWAP", line=dict(color="#FFD700", width=2.5)),
             row=1, col=1
         )
 
         # Pane 1: Upper Band (+1.28σ Orange Dotted)
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap_upper'], mode="lines", name="+1.28σ Band", line=dict(color="#FF9800", width=1.5, dash="dot")),
+            go.Scatter(x=df['dt'], y=df['vwap_upper'], mode="lines", name="+1.28σ Band", line=dict(color="#FF9800", width=1.5, dash="dot")),
             row=1, col=1
         )
 
         # Pane 1: Lower Band (-1.28σ Cyan Dashed)
         fig.add_trace(
-            go.Scatter(x=df['time_str'], y=df['vwap_lower'], mode="lines", name="-1.28σ Band", line=dict(color="#00F0FF", width=1.5, dash="dash")),
+            go.Scatter(x=df['dt'], y=df['vwap_lower'], mode="lines", name="-1.28σ Band", line=dict(color="#00F0FF", width=1.5, dash="dash")),
             row=1, col=1
         )
 
@@ -1358,7 +1362,7 @@ def update_quant_terminal_ui(n):
         if not imb_df.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=imb_df['time_str'], y=imb_df['high'] * 1.0001, mode='markers',
+                    x=imb_df['dt'], y=imb_df['high'] * 1.0001, mode='markers',
                     marker=dict(symbol='star', size=11, color='#00F0FF'), name='⭐ Imbalance',
                     showlegend=False
                 ), row=1, col=1
@@ -1385,7 +1389,7 @@ def update_quant_terminal_ui(n):
         delta_texts = [f"{d:+.0f}" if abs(d) >= 0.5 else "" for d in df['delta']]
         fig.add_trace(
             go.Bar(
-                x=df['time_str'], y=df['delta'], name="Delta",
+                x=df['dt'], y=df['delta'], name="Delta",
                 marker_color=delta_colors,
                 text=delta_texts,
                 textposition="outside",
@@ -1403,7 +1407,7 @@ def update_quant_terminal_ui(n):
         window_cvd = (df['delta'].cumsum()).round(1)
         fig.add_trace(
             go.Scatter(
-                x=df['time_str'], y=window_cvd, mode="lines", name="CVD",
+                x=df['dt'], y=window_cvd, mode="lines", name="CVD",
                 line=dict(color="#38BDF8", width=2.2),
                 fill="tozeroy", fillcolor="rgba(56,189,248,0.22)", showlegend=False
             ), row=3, col=1
@@ -1414,19 +1418,74 @@ def update_quant_terminal_ui(n):
             showarrow=False, font=dict(size=9, color="#38BDF8", weight="bold"), align="left"
         )
 
-        fig.update_xaxes(type='category', showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), fixedrange=False)
-        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=1, col=1, fixedrange=False)
-        fig.update_yaxes(showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=2, col=1, fixedrange=False)
-        fig.update_yaxes(autorange=True, showgrid=True, gridcolor="#131C2E", tickfont=dict(size=8, color="#64748B"), side="right", row=3, col=1, fixedrange=False)
+        last_dt = df['dt'].iloc[-1]
+        start_dt = df['dt'].iloc[-80] if len(df) >= 80 else df['dt'].iloc[0]
+        if start_dt >= last_dt:
+            start_dt = last_dt - pd.Timedelta(hours=1)
+        end_dt = last_dt + pd.Timedelta(minutes=5)
+
+        fig.update_xaxes(
+            type="date",
+            range=[start_dt, end_dt],
+            showgrid=True, gridcolor="#131C2E",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            rangeselector=dict(
+                buttons=[
+                    dict(count=15, label="15M", step="minute", stepmode="backward"),
+                    dict(count=30, label="30M", step="minute", stepmode="backward"),
+                    dict(count=1, label="1H", step="hour", stepmode="backward"),
+                    dict(count=4, label="4H", step="hour", stepmode="backward"),
+                    dict(count=12, label="12H", step="hour", stepmode="backward"),
+                    dict(count=1, label="1D", step="day", stepmode="backward"),
+                    dict(step="all", label="ALL")
+                ],
+                bgcolor="#0D1117",
+                activecolor="#1F6FEB",
+                bordercolor="#30363D",
+                borderwidth=1,
+                font=dict(color="#C9D1D9", size=10, family="monospace"),
+                x=0.0, y=1.03, xanchor="left", yanchor="bottom"
+            ),
+            rangeslider=dict(visible=False),
+            row=1, col=1
+        )
+        fig.update_xaxes(
+            type="date",
+            showgrid=True, gridcolor="#131C2E",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            row=2, col=1
+        )
+        fig.update_xaxes(
+            type="date",
+            showgrid=True, gridcolor="#131C2E",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False,
+            row=3, col=1
+        )
+        fig.update_yaxes(
+            showgrid=True, gridcolor="#131C2E", side="right",
+            showline=True, linecolor="#1E293B",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikethickness=1, spikedash="dot", spikecolor="#8B949E",
+            fixedrange=False
+        )
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor="#0A0E17",
             plot_bgcolor="#0A0E17",
-            margin=dict(l=6, r=60, t=10, b=10),
+            margin=dict(l=6, r=60, t=25, b=10),
             xaxis_rangeslider_visible=False,
             showlegend=False,
             dragmode="pan",
-            uirevision="constant_zoom_state",
+            uirevision="tradingview_user_zoom",
             autosize=True
         )
     else:
