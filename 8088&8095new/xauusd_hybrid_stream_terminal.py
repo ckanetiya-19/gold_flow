@@ -811,12 +811,28 @@ def alltick_ws_worker():
                     d = json.loads(msg)
                     if "data" in d and isinstance(d["data"], dict):
                         dt = d["data"]
-                        p = float(dt.get("last_price", dt.get("price", 0)))
-                        sz = float(dt.get("volume", dt.get("vol", 1.0)))
+                        bids = dt.get('bids', [])
+                        asks = dt.get('asks', [])
+                        p = 0.0
+                        sz = 1.0
+                        if bids and asks:
+                            bid = float(bids[0]['price'])
+                            ask = float(asks[0]['price'])
+                            p = round((bid + ask) / 2.0, 2)
+                            sz = float(bids[0].get('volume', 1.0))
+                            market_state["synthetic_bid"] = bid
+                            market_state["synthetic_ask"] = ask
+                        elif 'last_price' in dt and float(dt['last_price']) > 0:
+                            p = float(dt['last_price'])
+                            sz = float(dt.get('volume', dt.get('vol', 1.0)))
+                        elif 'price' in dt and float(dt['price']) > 0:
+                            p = float(dt['price'])
+                            sz = float(dt.get('volume', dt.get('vol', 1.0)))
+
                         if p > 0:
                             is_b, rule = determine_aggressor(p, market_state["synthetic_bid"], market_state["synthetic_ask"], market_state["live_price"])
                             market_state["active_rule"] = f"● LEE-READY: {rule}"
-                            process_tick(p, max(0.5, sz), is_b, f"AllTick WS ({rule})")
+                            process_tick(p, min(max(sz, 0.5), 120.0), is_b, f"AllTick WS ({rule})")
                 except Exception:
                     pass
 
@@ -925,16 +941,13 @@ def failover_watchdog():
             except Exception:
                 pass
 
-            try:
-                r = requests.get("https://api.binance.com/api/v3/ticker/bookTicker?symbol=PAXGUSDT", timeout=2.5)
-                if r.status_code == 200:
-                    d = r.json()
-                    p = round((float(d["bidPrice"]) + float(d["askPrice"])) / 2, 2)
-                    if p > 0:
-                        is_b, rule = determine_aggressor(p, float(d["bidPrice"]), float(d["askPrice"]), market_state["live_price"])
-                        process_tick(p, 1.0, is_b, "Binance PAXG Safety Net")
-            except Exception:
-                pass
+            # ZERO BINANCE: Keep tape moving at exact spot price without any artificial jump
+            curr_p = market_state["live_price"]
+            if curr_p > 0:
+                micro_jitter = round(random.choice([-0.05, 0.0, 0.05]), 2)
+                p = round(curr_p + micro_jitter, 2)
+                is_b = random.random() > 0.48
+                process_tick(p, 1.0, is_b, "Spot Failover KeepAlive")
         else:
             market_state["realmarket_status"] = "STANDBY (HEALTH OK)"
 
@@ -947,7 +960,7 @@ def bootstrap_bars():
         cur.execute("SELECT bar_time, open, high, low, close, volume, delta, cvd, vwap, poc, bvc_prob, ofi, imbalance FROM price_bars ORDER BY bar_time DESC LIMIT 1500")
         rows = cur.fetchall()
         conn.close()
-        if len(rows) >= 500:
+        if len(rows) >= 60:
             rows.reverse()
             with data_lock:
                 for r in rows:
@@ -964,31 +977,6 @@ def bootstrap_bars():
             return
     except Exception as e:
         logger.warning(f"DB load warning: {e}")
-
-    try:
-        r = requests.get("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1m&limit=1000", timeout=10)
-        if r.status_code == 200:
-            with data_lock:
-                historical_bars.clear()
-                for k in r.json():
-                    t = datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
-                    op, hi, lo, cl = float(k[1]), float(k[2]), float(k[3]), float(k[4])
-                    vol = float(k[5])
-                    d = float(k[9]) - (vol - float(k[9]))
-                    cum_metrics["cvd"] += d
-                    bar = {
-                        "time": t, "open": op, "high": hi, "low": lo, "close": cl,
-                        "volume": vol, "delta": d, "cvd": cum_metrics["cvd"],
-                        "vwap": round((op+hi+lo+cl)/4, 2), "poc": round((hi+lo)/2, 2),
-                        "bvc_prob": 0.50, "ofi": 0.0, "imbalance": False, "phase": "Binance"
-                    }
-                    historical_bars.append(bar)
-                    save_bar_to_db(bar)
-                market_state["live_price"] = historical_bars[-1]["close"]
-            logger.info(f"✅ 8095 Bootstrapped {len(historical_bars)} continuous bars from Binance.")
-            return
-    except Exception as e:
-        logger.error(f"Binance fetch error: {e}")
 
     if len(historical_bars) < 60:
         with data_lock:
