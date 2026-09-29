@@ -85,7 +85,7 @@ CONFIG = {
     "SYMBOL": "XAUUSD",
     "LOT_SIZE": 0.01,
     "RISK_REWARD": 2.5,
-    "ALLTICK_TOKEN": "e4432003c7fb8ef16dce2c8fbcf1ae57-c-app",
+    "ALLTICK_TOKEN": "4925bd3c3d58234362b2481ad684a0a7-c-app",
     "ITICK_TOKEN": "7111eb89b6364381bad7d4a507b5573ac880fb5d6c0e47bda0cae76a453c1bb0",
     "TWELVEDATA_KEYS": [
         "7b4a5b6feaf2429180934a74c8d88905",

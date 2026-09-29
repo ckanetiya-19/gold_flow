@@ -48,9 +48,9 @@ This folder contains the complete, self-contained **Pure Spot Gold Order Flow & 
 ---
 
 ## 4. API Keys Configuration
-- **AllTick Token (Port 8070)**: *[Waiting for User's New Token]*
-- **AllTick Token (Port 8080)**: *[Waiting for User's New Token]*
-- **iTick Token (Shared 8070 & 8080)**: *[Waiting for User's New Token]*
+- **AllTick Token (Port 8070)**: `de36ba2fd50be697d72d9336d249ec8d-c-app` (Dedicated)
+- **AllTick Token (Port 8080)**: `ee8db5ca115f423a9debb36a8947eddb-c-app` (Dedicated)
+- **iTick Token (Shared 8070 & 8080)**: `475ba01817e945f5920509a34db9305cf0ab0dea0e934212aee138cbdbd92cae` (Validated)
 - **TwelveData & RealMarket**: Handled automatically via `multi_api_key_pool.py` (22 rotating keys).
 
 ---

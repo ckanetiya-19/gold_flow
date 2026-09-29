@@ -47,7 +47,7 @@ This folder contains the self-contained **Live MT5 Consensus Execution Engine & 
 ## 4. API Keys Configuration
 - **Port 8088 AllTick Token**: `e4432003c7fb8ef16dce2c8fbcf1ae57-c-app` (Dedicated)
 - **Port 8088 & 8095 iTick Token**: `73f7322874cd42bbb126499c62a7c4c01dd60a55460745dabba192d9528e2bc1` (Shared between 8088 & 8095)
-- **Port 8095 AllTick Token**: *[Waiting for User's New Token]*
+- **Port 8095 AllTick Token**: `4925bd3c3d58234362b2481ad684a0a7-c-app` (Dedicated)
 - **Backup Spot Pool**: Handled automatically via `multi_api_key_pool.py`.
 
 ---
