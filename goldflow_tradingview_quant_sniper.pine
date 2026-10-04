@@ -1,0 +1,261 @@
+//@version=5
+indicator("GOLD.FLOW // Institutional Quant Sniper & Level Boxes", "GOLDFLOW QUANT", overlay=true, scale=scale.right, format=format.price, precision=2, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// =============================================================================
+// 1. INPUT SETTINGS & CUSTOMIZATION
+// =============================================================================
+group_boxes   = "📦 VALUE AREA / LEVEL BOXES (VIDEO STYLE)"
+show_boxes    = input.bool(true, "Show Value Area Consolidation Boxes", group=group_boxes)
+box_len       = input.int(15, "Consolidation Lookback Length", minval=5, maxval=50, group=group_boxes)
+box_mult      = input.float(1.5, "Box Volume Factor", minval=1.0, maxval=3.0, step=0.1, group=group_boxes)
+box_bg_color  = input.color(color.new(#00F0FF, 88), "Box Background Fill", group=group_boxes)
+box_border_c  = input.color(color.new(#00F0FF, 30), "Box Border Color", group=group_boxes)
+vah_color     = input.color(#38BDF8, "VAH Line Color (Value Area High)", group=group_boxes)
+poc_color     = input.color(#FFB703, "POC Line Color (Point of Control)", group=group_boxes)
+val_color     = input.color(#00F0FF, "VAL Line Color (Value Area Low)", group=group_boxes)
+show_profiles = input.bool(true, "Show Orange Profile Lines inside Box", group=group_boxes)
+
+group_vwap    = "⚡ VWAP & VOLATILITY BANDS"
+show_vwap     = input.bool(true, "Show Session VWAP", group=group_vwap)
+show_bands    = input.bool(true, "Show ±1.28σ Bands", group=group_vwap)
+vwap_color    = input.color(#FFD700, "VWAP Color", group=group_vwap)
+band_color    = input.color(#00F0FF, "Bands Color", group=group_vwap)
+
+group_sniper  = "🎯 VWAP QUANT SNIPER ($3 - $5 TP ENGINE)"
+show_signals  = input.bool(true, "Show Sniper Buy/Sell Signals", group=group_sniper)
+show_targets  = input.bool(true, "Show Live Right-Extending Target Lines", group=group_sniper)
+tp_target_pts = input.float(4.0, "Take Profit ($ Points)", minval=1.0, maxval=15.0, step=0.5, group=group_sniper)
+sl_risk_pts   = input.float(1.8, "Stop Loss ($ Points)", minval=0.5, maxval=10.0, step=0.1, group=group_sniper)
+chop_threshold= input.float(61.8, "Choppiness Sideways Filter", minval=50.0, maxval=75.0, group=group_sniper)
+show_stars    = input.bool(true, "Show ⭐ Volume Imbalance Stars", group=group_sniper)
+
+group_hud     = "🖥️ ON-CHART HUD DASHBOARD"
+show_hud      = input.bool(true, "Show Quant HUD Table", group=group_hud)
+
+// =============================================================================
+// 2. BILL DREISS CHOPPINESS INDEX & KAUFMAN EFFICIENCY (KER)
+// =============================================================================
+// 14-Period Choppiness Index
+sum_atr_14 = math.sum(ta.tr, 14)
+max_high_14 = ta.highest(high, 14)
+min_low_14 = ta.lowest(low, 14)
+range_14 = max_high_14 - min_low_14
+chop = (range_14 > 0 and sum_atr_14 > 0) ? 100.0 * (math.log10(sum_atr_14 / range_14) / math.log10(14.0)) : 50.0
+is_sideways = chop >= chop_threshold
+
+// Kaufman Efficiency Ratio (KER)
+ker_change = math.abs(close - close[10])
+ker_path = math.sum(math.abs(close - close[1]), 10)
+ker = ker_path > 0 ? (ker_change / ker_path) : 0.5
+
+// Volume Imbalance
+avg_vol = ta.sma(volume, 20)
+is_imbalance = volume > (avg_vol * 1.8)
+
+// =============================================================================
+// 3. SESSION VWAP & STANDARD DEVIATION BANDS
+// =============================================================================
+calc_vwap = ta.vwap(hlc3)
+vwap_stdev = ta.stdev(close, 20)
+vwap_upper = calc_vwap + (vwap_stdev * 1.28)
+vwap_lower = calc_vwap - (vwap_stdev * 1.28)
+
+plot(show_vwap ? calc_vwap : na, "VWAP", color=vwap_color, linewidth=2)
+plot(show_bands ? vwap_upper : na, "+1.28σ Band", color=band_color, style=plot.style_linebr, linewidth=1)
+plot(show_bands ? vwap_lower : na, "-1.28σ Band", color=band_color, style=plot.style_linebr, linewidth=1)
+
+// =============================================================================
+// 4. VALUE AREA CONSOLIDATION BOXES & PROFILE LINES (VIDEO STYLE)
+// =============================================================================
+var box active_box = na
+var line line_vah = na
+var line line_poc = na
+var line line_val = na
+
+// Consolidation Detection: High-Low range compressed + Sideways regime
+highest_h = ta.highest(high, box_len)
+lowest_l  = ta.lowest(low, box_len)
+mid_range = (highest_h + lowest_l) / 2.0
+box_height = highest_h - lowest_l
+avg_tr_20 = ta.sma(ta.tr, 20)
+
+is_consolidating = box_height < (avg_tr_20 * 3.2) and is_sideways
+
+if show_boxes and is_consolidating and barstate.isconfirmed
+    val_y = lowest_l + (box_height * 0.15)
+    vah_y = highest_h - (box_height * 0.15)
+    poc_y = mid_range
+
+    if ta.cross(close, mid_range) or (bar_index % box_len == 0)
+        // Draw the cyan Value Area Box strictly pinned to price levels
+        active_box := box.new(left=bar_index - box_len, top=vah_y, right=bar_index + 4, bottom=val_y,
+                              border_color=box_border_c, border_width=1,
+                              bgcolor=box_bg_color)
+        
+        // Draw VAH, POC, and VAL Lines
+        line_vah := line.new(bar_index - box_len, vah_y, bar_index + 6, vah_y, color=vah_color, width=1, style=line.style_dashed)
+        line_poc := line.new(bar_index - box_len, poc_y, bar_index + 10, poc_y, color=poc_color, width=2)
+        line_val := line.new(bar_index - box_len, val_y, bar_index + 6, val_y, color=val_color, width=1, style=line.style_dashed)
+
+        // Draw horizontal orange volume profile bars inside the box
+        if show_profiles
+            for i = 1 to 3
+                step_y = val_y + (box_height * 0.18 * i)
+                line.new(bar_index - box_len + (i * 2), step_y, bar_index - 2, step_y,
+                         color=color.new(#FB923C, 35), width=3)
+
+// ⭐ Imbalance Stars
+plotchar(show_stars and is_imbalance, title="⭐ Imbalance Star",
+         char="⭐", location=location.abovebar,
+         color=#00F0FF, size=size.tiny, display=display.pane)
+
+// =============================================================================
+// 5. ACTIVE POSITION ENGINE & DYNAMIC TARGET TRACKING
+// =============================================================================
+var bool in_position  = false
+var string pos_side   = "" // "BUY" or "SELL"
+var float pos_entry   = na
+var float pos_tp      = na
+var float pos_sl      = na
+
+var line line_entry   = na
+var line line_tp      = na
+var line line_sl      = na
+var label lbl_tp      = na
+var label lbl_sl      = na
+
+// Real-time check if current candle reaches TP or SL
+if in_position
+    bool tp_hit = (pos_side == "BUY" and high >= pos_tp) or (pos_side == "SELL" and low <= pos_tp)
+    bool sl_hit = (pos_side == "BUY" and low <= pos_sl)  or (pos_side == "SELL" and high >= pos_sl)
+
+    if tp_hit or sl_hit
+        in_position := false
+        pos_side    := ""
+        // Freeze lines at the exit candle
+        if not na(line_entry)
+            line.set_x2(line_entry, bar_index)
+            line.set_extend(line_entry, extend.none)
+        if not na(line_tp)
+            line.set_x2(line_tp, bar_index)
+            line.set_extend(line_tp, extend.none)
+        if not na(line_sl)
+            line.set_x2(line_sl, bar_index)
+            line.set_extend(line_sl, extend.none)
+        if not na(lbl_tp)
+            label.set_x(lbl_tp, bar_index + 2)
+        if not na(lbl_sl)
+            label.set_x(lbl_sl, bar_index + 2)
+    else
+        // Keep target labels moving forward with the live candle
+        if not na(lbl_tp)
+            label.set_x(lbl_tp, bar_index + 4)
+        if not na(lbl_sl)
+            label.set_x(lbl_sl, bar_index + 4)
+
+// =============================================================================
+// 6. VWAP QUANT SNIPER ($3 - $5 TP) EXECUTION
+// =============================================================================
+candle_range = high - low
+candle_body  = math.abs(close - open)
+body_ratio   = candle_range > 0 ? (candle_body / candle_range) : 0.0
+
+// Only take signals when NOT already inside an active trade
+can_signal = (not in_position) and (not is_sideways)
+
+sniper_buy  = can_signal and (close > open) and (close >= calc_vwap + 0.5) and (body_ratio >= 0.62) and (volume > avg_vol * 1.1)
+sniper_sell = can_signal and (close < open) and (close <= calc_vwap - 0.5) and (body_ratio >= 0.62) and (volume > avg_vol * 1.1)
+
+// Plot Signal Shapes directly attached to candlestick high/low
+plotshape(show_signals and sniper_buy, title="🟢 SNIPER BUY",
+          style=shape.labelup, location=location.belowbar,
+          color=#00E676, text="BUY", textcolor=color.black, size=size.small, display=display.pane)
+
+plotshape(show_signals and sniper_sell, title="🔴 SNIPER SELL",
+          style=shape.labeldown, location=location.abovebar,
+          color=#FF3366, text="SELL", textcolor=color.white, size=size.small, display=display.pane)
+
+// Open new trade & extend lines dynamically rightward with candles
+if barstate.isconfirmed
+    if sniper_buy
+        in_position := true
+        pos_side    := "BUY"
+        pos_entry   := close
+        pos_tp      := pos_entry + tp_target_pts
+        pos_sl      := pos_entry - sl_risk_pts
+
+        line.delete(line_entry)
+        line.delete(line_tp)
+        line.delete(line_sl)
+        label.delete(lbl_tp)
+        label.delete(lbl_sl)
+
+        if show_targets
+            line_entry := line.new(bar_index, pos_entry, bar_index + 10, pos_entry, color=#00F0FF, width=2, extend=extend.right)
+            line_tp    := line.new(bar_index, pos_tp,    bar_index + 10, pos_tp,    color=#00E676, width=2, extend=extend.right)
+            line_sl    := line.new(bar_index, pos_sl,    bar_index + 10, pos_sl,    color=#FF3366, width=2, extend=extend.right)
+            
+            lbl_tp := label.new(bar_index + 4, pos_tp, "TP: " + str.tostring(pos_tp, "#.##"), color=#00E676, textcolor=color.black, style=label.style_label_left, size=size.small)
+            lbl_sl := label.new(bar_index + 4, pos_sl, "SL: " + str.tostring(pos_sl, "#.##"), color=#FF3366, textcolor=color.white, style=label.style_label_left, size=size.small)
+
+    else if sniper_sell
+        in_position := true
+        pos_side    := "SELL"
+        pos_entry   := close
+        pos_tp      := pos_entry - tp_target_pts
+        pos_sl      := pos_entry + sl_risk_pts
+
+        line.delete(line_entry)
+        line.delete(line_tp)
+        line.delete(line_sl)
+        label.delete(lbl_tp)
+        label.delete(lbl_sl)
+
+        if show_targets
+            line_entry := line.new(bar_index, pos_entry, bar_index + 10, pos_entry, color=#00F0FF, width=2, extend=extend.right)
+            line_tp    := line.new(bar_index, pos_tp,    bar_index + 10, pos_tp,    color=#00E676, width=2, extend=extend.right)
+            line_sl    := line.new(bar_index, pos_sl,    bar_index + 10, pos_sl,    color=#FF3366, width=2, extend=extend.right)
+
+            lbl_tp := label.new(bar_index + 4, pos_tp, "TP: " + str.tostring(pos_tp, "#.##"), color=#00E676, textcolor=color.black, style=label.style_label_left, size=size.small)
+            lbl_sl := label.new(bar_index + 4, pos_sl, "SL: " + str.tostring(pos_sl, "#.##"), color=#FF3366, textcolor=color.white, style=label.style_label_left, size=size.small)
+
+// =============================================================================
+// 7. ON-CHART HUD DASHBOARD (TOP RIGHT)
+// =============================================================================
+var table hud = table.new(position=position.top_right, columns=2, rows=5,
+                          bgcolor=color.new(#070A0F, 10), border_color=#162032, border_width=1)
+
+if show_hud and barstate.islast
+    regime_txt = is_sideways ? "SIDEWAYS CHOP" : "TRENDING EXPANSION"
+    regime_col = is_sideways ? #FF3366 : #00E676
+
+    // Live PnL calculation for HUD
+    pnl_pts = in_position ? (pos_side == "BUY" ? (close - pos_entry) : (pos_entry - close)) : 0.0
+    pnl_str = (pnl_pts >= 0 ? "+" : "") + str.tostring(pnl_pts, "#.##")
+
+    sniper_txt = in_position ? (pos_side == "BUY" ? "🟢 BUY ACTIVE (" + pnl_str + ")" : "🔴 SELL ACTIVE (" + pnl_str + ")") : is_sideways ? "⛔ TRADES BLOCKED" : "STANDBY (SCANNING)"
+    sniper_col = in_position ? (pos_side == "BUY" ? #00E676 : #FF3366) : is_sideways ? #FF8A9E : #FFD700
+
+    bvc_pct = math.round((ker * 100))
+    bvc_txt = str.tostring(bvc_pct) + "% " + (bvc_pct >= 50 ? "(Bulls)" : "(Bears)")
+    bvc_col = bvc_pct >= 50 ? #00E676 : #FF3366
+
+    // Header Row
+    table.cell(hud, 0, 0, "GOLD.FLOW // AI HUD", bgcolor=#0A0E17, text_color=#FFD700, text_size=size.small)
+    table.cell(hud, 1, 0, "PORT 8095 ENGINE", bgcolor=#0A0E17, text_color=#38BDF8, text_size=size.small)
+
+    // Row 1: AI Regime
+    table.cell(hud, 0, 1, "AI REGIME", text_color=#94A3B8, text_size=size.small)
+    table.cell(hud, 1, 1, regime_txt, text_color=regime_col, text_size=size.small)
+
+    // Row 2: CHOP & KER
+    table.cell(hud, 0, 2, "CHOP / KER", text_color=#94A3B8, text_size=size.small)
+    table.cell(hud, 1, 2, str.tostring(chop, "#.#") + " | " + str.tostring(ker, "#.##"), text_color=#E2E8F0, text_size=size.small)
+
+    // Row 3: Quant Sniper
+    table.cell(hud, 0, 3, "QUANT SNIPER", text_color=#94A3B8, text_size=size.small)
+    table.cell(hud, 1, 3, sniper_txt, text_color=sniper_col, text_size=size.small)
+
+    // Row 4: Flow Bias
+    table.cell(hud, 0, 4, "FLOW BIAS", text_color=#94A3B8, text_size=size.small)
+    table.cell(hud, 1, 4, bvc_txt, text_color=bvc_col, text_size=size.small)

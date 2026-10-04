@@ -3,12 +3,13 @@
 *.log
 *.err.log
 *.out.log
+server_logs/
 
 # Databases (local state - rebuilt on the server from live feed)
 *.db
 *.db-journal
 
-# Big data / media / caches (the repo was 2.3 GB because of these)
+# Big data / media / caches (the local repo was 2.3 GB because of these)
 *.pkl
 *.npz
 *.dbn
@@ -19,21 +20,27 @@
 *.jpg
 *.jpeg
 *.gif
+*.zip
+*.tar.gz
+*.rar
+screenshots/
+test_shot_*.png
 
 # Python caches
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.pyd
+.pytest_cache/
 .venv/
 venv/
+env/
 
 # Project-local folders that must NOT go to the server/GitHub
 _backups/
 _archive/
 questdb_v2/
 questdb/
-*.tar.gz
-*.zip
 *.dll
 *.exe
 node_modules/
@@ -46,4 +53,7 @@ node_modules/
 
 # OS
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 .DS_Store

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goldflow"
+version = "0.1.0"
+description = "Order flow research and execution toolkit for XAU/USD: read COMEX GC, execute spot"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "statsmodels>=0.14",
+]
+
+[project.optional-dependencies]
+databento = ["databento>=0.34"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+goldflow = "goldflow.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["goldflow*"]

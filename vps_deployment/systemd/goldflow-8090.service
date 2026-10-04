@@ -1,0 +1,18 @@
+[Unit]
+Description=GoldFlow Port 8090 - Unified Trinity Radar & JARVIS
+After=network.target
+
+[Service]
+Type=simple
+User=goldflow
+WorkingDirectory=/opt/goldflow/radar_8090
+ExecStart=/opt/goldflow/venv/bin/python xauusd_satellite_radar.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goldflow-8090
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=GoldFlow Port 8080 - AI Quant Sniper Terminal
+After=network.target
+
+[Service]
+Type=simple
+User=goldflow
+WorkingDirectory=/opt/goldflow/8080_8070
+ExecStart=/opt/goldflow/venv/bin/python xauusd_quant_terminal.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goldflow-8080
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2 @@
+[console_scripts]
+goldflow = goldflow.cli:main

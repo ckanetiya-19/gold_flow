@@ -1,0 +1,18 @@
+[Unit]
+Description=GoldFlow Port 8086 - Confluence Strategy Backtest Lab
+After=network.target
+
+[Service]
+Type=simple
+User=goldflow
+WorkingDirectory=/opt/goldflow/backtest_8086
+ExecStart=/opt/goldflow/venv/bin/python goldflow_backtest_8086.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goldflow-8086
+
+[Install]
+WantedBy=multi-user.target
