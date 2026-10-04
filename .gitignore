@@ -1,0 +1,49 @@
+# ===== Goldflow .gitignore - push only CODE, never data/logs/secrets =====
+# Logs
+*.log
+*.err.log
+*.out.log
+
+# Databases (local state - rebuilt on the server from live feed)
+*.db
+*.db-journal
+
+# Big data / media / caches (the repo was 2.3 GB because of these)
+*.pkl
+*.npz
+*.dbn
+*.pdf
+*.mp4
+*.mov
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Project-local folders that must NOT go to the server/GitHub
+_backups/
+_archive/
+questdb_v2/
+questdb/
+*.tar.gz
+*.zip
+*.dll
+*.exe
+node_modules/
+
+# Secrets / env (keys live in env vars, never in the repo)
+.env
+*.key
+*_secret*
+*credentials*
+
+# OS
+Thumbs.db
+.DS_Store
