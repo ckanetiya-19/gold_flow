@@ -60,12 +60,16 @@ import mt5_exec
 # =============================================================================
 # CONFIG
 # =============================================================================
-HOST = "127.0.0.1"
+HOST = os.getenv("GOLDFLOW_BIND_HOST", "127.0.0.1")
 PORT = 9900
 ITICK_WS_URL = os.getenv("GOLDFLOW_9900_ITICK_WS_URL", "wss://api-free.itick.org/forex")
 ITICK_SYMBOL = os.getenv("GOLDFLOW_9900_ITICK_SYMBOL", "XAUUSD$GB")
 # Its OWN iTick key (separate from Port 9000's), so both can run at once.
 ITICK_KEY = os.getenv("GOLDFLOW_9900_ITICK_KEY", "") or os.getenv("GOLDFLOW_ITICK_API_KEY", "")
+# FEED_MODE: "direct" (default) = own iTick connection; "hub" = subscribe to the
+# shared feed hub (so 9900 + 9080 can share ONE iTick key via the hub).
+FEED_MODE = os.getenv("GOLDFLOW_9900_FEED_MODE", "direct")
+HUB_WS_URL = os.getenv("GOLDFLOW_9900_HUB_WS_URL", "ws://127.0.0.1:9200/ws")
 
 PRICE_BIN = 0.1                  # footprint / DOM price bucket
 DOM_LEVELS = 6                   # levels each side of spot in the synthetic ladder
@@ -304,6 +308,53 @@ async def itick_loop():
             logger.warning(f"iTick feed error ({e!r}); retry in {backoff}s. (No ticks expected weekends.)")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+
+
+async def hub_loop():
+    """FEED_MODE=hub: subscribe to the shared feed hub instead of opening our
+    own iTick connection, so 9900 + 9080 can share ONE iTick key via the hub.
+    The hub relays tick/depth/mark_price; ticks go into on_trade, depth/mark
+    update best bid/ask (which on_trade's Lee-Ready side uses)."""
+    global best_bid, best_ask
+    backoff = 2
+    while True:
+        try:
+            logger.info(f"Subscribing to feed hub at {HUB_WS_URL} (shared key)...")
+            async with websockets.connect(HUB_WS_URL, ping_interval=None, open_timeout=10) as ws:
+                conn_state["connected"] = True
+                backoff = 2
+                logger.info("Connected to feed hub.")
+                async for raw in ws:
+                    try:
+                        m = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    t = m.get("type")
+                    if t == "tick":
+                        try:
+                            price = float(m["price"]); size = float(m.get("volume", 0) or 0); ts = int(m.get("timestamp", 0))
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if price > 0 and size > 0:
+                            on_trade(price, size, ts)
+                    elif t == "depth":
+                        try:
+                            b = m.get("bids") or []; a = m.get("asks") or []
+                            if a: best_ask = float(a[0][0])
+                            if b: best_bid = float(b[0][0])
+                        except (TypeError, ValueError, IndexError):
+                            pass
+                    elif t == "mark_price":
+                        try:
+                            if m.get("bid"): best_bid = float(m["bid"])
+                            if m.get("ask"): best_ask = float(m["ask"])
+                        except (TypeError, ValueError):
+                            pass
+        except Exception as e:
+            conn_state["connected"] = False
+            logger.warning(f"Feed hub error ({e!r}); retry in {backoff}s.")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)
 
 
 # =============================================================================
@@ -581,7 +632,11 @@ async def startup():
     logger.info(f"Restored {len(loaded)} bars from {DB_FILE}. iTick key: {'set' if ITICK_KEY else 'MISSING'}.")
     logger.info(f"iTick Order-Flow Terminal on {HOST}:{PORT} - iTick-only, no PAXG. "
                 f"Strategies ON (VWAP-Crossover magic 90901 + Zones magic 90902); MT5 {'DEMO' if _mt5.ready else 'off/paper'}.")
-    asyncio.create_task(itick_loop())
+    if FEED_MODE == "hub":
+        logger.info(f"FEED_MODE=hub -> using shared feed hub ({HUB_WS_URL}).")
+        asyncio.create_task(hub_loop())
+    else:
+        asyncio.create_task(itick_loop())
 
 
 if __name__ == "__main__":
